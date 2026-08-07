@@ -1,0 +1,21 @@
+# Local-only manual test scripts/commands - not part of the module.
+test_cmds/
+
+# Go build artifacts
+*.exe
+*.dll
+*.test
+bin/
+dist/
+
+# Terraform
+*.tfstate
+*.tfplan
+.terraform/
+
+# OS/editor cruft
+.DS_Store
+.idea
+*.iml
+*~
+.*.swp

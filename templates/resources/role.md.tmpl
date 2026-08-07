@@ -1,0 +1,25 @@
+---
+page_title: "{{.Type}} {{.Name}} - {{.ProviderName}}"
+subcategory: ""
+description: |-
+{{ .Description | plainmarkdown | trimspace | prefixlines "  " }}
+---
+
+# {{.Type}} {{.Name}}
+
+Manages a Spanner database role used for [fine-grained access control
+(FGAC)](https://cloud.google.com/spanner/docs/fgac-about). A role is purely a named container:
+it has no attributes of its own (no login/password, unlike some other databases' roles) - grant
+privileges and role membership to it via `GRANT ... TO ROLE` statements (managed by a separate
+resource once added). Spanner has no rename-role DDL, so changing `name` forces the role to be
+dropped and re-created.
+
+## Example Usage
+
+{{ tffile "examples/resources/spanner_role/resource.tf" }}
+
+{{ .SchemaMarkdown | trimspace }}
+
+## Import
+
+{{ codefile "shell" "examples/resources/spanner_role/import.sh" }}

@@ -1,0 +1,36 @@
+---
+page_title: "Provider: Spanner ACL"
+description: |-
+  Use the Spanner ACL provider to manage fine-grained access control in a Google Cloud Spanner database.
+---
+
+# Spanner ACL Provider
+
+Use the Spanner ACL provider to manage fine-grained access control (FGAC) in a
+[Google Cloud Spanner](https://cloud.google.com/spanner) database, including database roles,
+privilege grants, and role membership. The provider authenticates using the standard GCP client
+library scheme (Application Default Credentials by default) - see the
+[Authentication](guides/authentication) guide for details. Note that this provider does not
+manage the lifecycle of Spanner instances or databases themselves. It is focused on access
+control management within a single, already-existing database.
+
+## Example Usage
+
+{{ tffile "examples/provider/provider.tf" }}
+
+## Environment Variables
+
+The following environment variables are supported. They are read first; an explicit provider attribute overrides them.
+
+| Variable | Provider Attribute | Description |
+|---|---|---|
+| `SPANNER_PROJECT` | `project` | GCP project ID containing the target Spanner instance |
+| `SPANNER_INSTANCE` | `instance` | Spanner instance ID |
+| `SPANNER_DATABASE` | `database` | Spanner database ID to manage ACL objects on |
+| `SPANNER_CREDENTIALS` | `credentials` | Inline service account JSON key content |
+| `GOOGLE_APPLICATION_CREDENTIALS` | — | Path to a service account key file, used by Application Default Credentials when no provider-level credentials are set |
+
+See the [Authentication](guides/authentication) guide for the full set of supported credential
+sources and the IAM permissions required.
+
+{{ .SchemaMarkdown }}

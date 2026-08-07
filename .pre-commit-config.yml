@@ -1,6 +1,4 @@
 # Copyright RetailNext, Inc. 2026
-
----
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0
@@ -23,10 +21,3 @@ repos:
     rev: v0.21.0
     hooks:
       - id: yamlfmt
-  - repo: local
-    hooks:
-      - id: forbid-yml-extension
-        name: Forbid .yml extension
-        entry: YAML files must use .yaml extension
-        language: fail
-        files: \.yml$

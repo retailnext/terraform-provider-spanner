@@ -95,11 +95,10 @@ tests.
 
 ⚠️ **Full `spanner_role` acceptance tests (`TF_ACC=1`) do not currently pass against the
 emulator.** `Read` depends on `spanneracl.GetRole`, which queries
-`INFORMATION_SCHEMA.ROLES` — a view the Cloud Spanner emulator doesn't implement (see
-`CLAUDE.md` for details and the upstream tracking issue). Every `resource.Test` step runs a
-post-apply `Read` internally, so this currently blocks emulator-based acceptance testing of the
-resource end-to-end; it doesn't block real usage against actual Spanner. Exercise the resource
-against a real Spanner instance/database until the emulator gap is fixed upstream.
+`INFORMATION_SCHEMA.ROLES` — a view the Cloud Spanner emulator doesn't implement. Every
+`resource.Test` step runs a post-apply `Read` internally, so this currently blocks emulator-based
+acceptance testing of the resource end-to-end; it doesn't block real usage against actual Spanner.
+Exercise the resource against a real Spanner instance/database until the emulator gap is fixed upstream.
 
 To regenerate documentation after editing `templates/` or `examples/`, run:
 

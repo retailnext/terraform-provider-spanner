@@ -203,6 +203,7 @@ func (p *spannerProvider) Configure(ctx context.Context, req provider.ConfigureR
 func (p *spannerProvider) Resources(ctx context.Context) []func() resource.Resource {
 	return []func() resource.Resource{
 		NewRoleResource,
+		NewGrantResource,
 	}
 }
 

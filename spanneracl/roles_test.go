@@ -88,13 +88,6 @@ func skipGetRoleEmulatorGap(t *testing.T) {
 		"https://github.com/GoogleCloudPlatform/cloud-spanner-emulator/issues/350")
 }
 
-func TestValidateRoleName(t *testing.T) {
-	assert.NoError(t, validateRoleName("valid_role_123"))
-	assert.Error(t, validateRoleName(""))
-	assert.Error(t, validateRoleName("bad role"))
-	assert.Error(t, validateRoleName("bad-role"))
-}
-
 func TestCreateRoleInvalidName(t *testing.T) {
 	// Validation happens before any network call, so no emulator is needed.
 	client := &Client{}

@@ -24,9 +24,9 @@ const (
 )
 
 var (
-	templateCreateGrant, _ = template.New("createGrant").Parse(createGrantTemplate)
-	templateDeleteGrant, _ = template.New("deleteGrant").Parse(deleteGrantTemplate)
-	tableGrantPrivileges   = []string{"SELECT", "INSERT", "UPDATE", "DELETE"}
+	templateCreateGrant  = template.Must(template.New("createGrant").Parse(createGrantTemplate))
+	templateDeleteGrant  = template.Must(template.New("deleteGrant").Parse(deleteGrantTemplate))
+	tableGrantPrivileges = []string{"SELECT", "INSERT", "UPDATE", "DELETE"}
 
 	// validPrivileges and validResourceTypes are Spanner's full documented
 	// privilege/object vocabulary (see the Grant doc comment in domain.go).
@@ -35,8 +35,15 @@ var (
 	// the GRANT/REVOKE DDL - unlike RoleName/Resource/Columns, neither goes
 	// through quoteQualifiedIdentifier/validateIdentifier, so an
 	// unvalidated value here would reach UpdateDatabaseDdl unguarded.
-	validPrivileges    = []string{"SELECT", "INSERT", "UPDATE", "DELETE", "EXECUTE", "USAGE"}
-	validResourceTypes = []string{"TABLE", "VIEW", "CHANGE STREAM", "TABLE FUNCTION", "SEQUENCE", "SCHEMA"}
+	validPrivileges = []string{"SELECT", "INSERT", "UPDATE", "DELETE", "EXECUTE", "USAGE"}
+
+	// validResourceTypes is deliberately narrower than Spanner's full grant
+	// vocabulary (which also includes SEQUENCE, SCHEMA, and TABLE FUNCTION -
+	// see the fgac-privileges privilege/object matrix). GrantExists needs a
+	// confirmed INFORMATION_SCHEMA view to read a grant back, and only these
+	// three are confirmed: TABLE_PRIVILEGES/COLUMN_PRIVILEGES (TABLE, VIEW)
+	// and CHANGE_STREAM_PRIVILEGES.
+	validResourceTypes = []string{"TABLE", "VIEW", "CHANGE STREAM"}
 )
 
 // grantTemplateData adapts a Grant for rendering into DDL: it pre-quotes
@@ -81,15 +88,22 @@ func (c *Client) DeleteGrant(ctx context.Context, grant Grant) error {
 	return c.updateDatabaseDdl(ctx, buf.String())
 }
 
-// GrantExists reports whether the given grant currently exists, read back via
-// INFORMATION_SCHEMA.TABLE_PRIVILEGES (tables/views) or
-// INFORMATION_SCHEMA.COLUMN_PRIVILEGES (column-level grants).
+// GrantExists reports whether the given grant currently exists, read back
+// via INFORMATION_SCHEMA.TABLE_PRIVILEGES (tables/views),
+// INFORMATION_SCHEMA.COLUMN_PRIVILEGES (column-level grants), or
+// INFORMATION_SCHEMA.CHANGE_STREAM_PRIVILEGES (change streams) - dispatch
+// mirrors validResourceTypes, the resource types this package can actually
+// confirm a grant on.
 func (c *Client) GrantExists(ctx context.Context, grant Grant) (bool, error) {
 	grant = normalizeGrant(grant)
-	if len(grant.Columns) > 0 {
+	switch {
+	case len(grant.Columns) > 0:
 		return c.getGrantColumn(ctx, grant)
+	case grant.ResourceType == "CHANGE STREAM":
+		return c.getGrantChangeStream(ctx, grant)
+	default:
+		return c.getGrantTable(ctx, grant)
 	}
-	return c.getGrantTable(ctx, grant)
 }
 
 // getGrantTable reports whether grant.Privilege is granted on grant.Resource
@@ -119,6 +133,35 @@ func (c *Client) getGrantTable(ctx context.Context, grant Grant) (bool, error) {
 	}
 	if err != nil {
 		return false, fmt.Errorf("failed to query grant: %w", err)
+	}
+	return true, nil
+}
+
+// getGrantChangeStream reports whether grant.Privilege is granted on
+// grant.Resource (a change stream), via
+// INFORMATION_SCHEMA.CHANGE_STREAM_PRIVILEGES.
+func (c *Client) getGrantChangeStream(ctx context.Context, grant Grant) (bool, error) {
+	schema, resource := splitSchemaQualified(grant.Resource)
+	stmt := spanner.Statement{
+		SQL: `SELECT 1 FROM INFORMATION_SCHEMA.CHANGE_STREAM_PRIVILEGES
+				WHERE GRANTEE = @role_name AND CHANGE_STREAM_SCHEMA = @change_stream_schema
+				AND CHANGE_STREAM_NAME = @change_stream_name AND PRIVILEGE_TYPE = @privilege LIMIT 1`,
+		Params: map[string]any{
+			"role_name":            grant.RoleName,
+			"change_stream_schema": schema,
+			"change_stream_name":   resource,
+			"privilege":            grant.Privilege,
+		},
+	}
+	iter := c.DataClient.Single().Query(ctx, stmt)
+	defer iter.Stop()
+
+	_, err := iter.Next()
+	if errors.Is(err, iterator.Done) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("failed to query change stream grant: %w", err)
 	}
 	return true, nil
 }

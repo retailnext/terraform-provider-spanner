@@ -27,10 +27,14 @@ type Role struct {
 // scylladb.Grant's one-call-per-grant shape rather than Spanner's native
 // comma-separated multi-privilege/multi-target GRANT syntax.
 // 2. Granting role to another role is not considered in this provider.
+// 3. ResourceType is narrower than Spanner's full grant vocabulary - see
+// validResourceTypes in grant.go for why SEQUENCE, SCHEMA, and TABLE
+// FUNCTION are deliberately not supported yet (no confirmed
+// INFORMATION_SCHEMA privilege view to read a grant back with).
 type Grant struct {
 	RoleName     string   // grantee role name
 	Privilege    string   // SELECT, INSERT, UPDATE, DELETE, EXECUTE, USAGE
-	ResourceType string   // TABLE, VIEW, CHANGE STREAM, TABLE FUNCTION, SEQUENCE, SCHEMA
+	ResourceType string   // TABLE, VIEW, or CHANGE STREAM - see validResourceTypes in grant.go
 	Resource     string   // resource name, optionally schema-qualified as "schema.name"
 	Columns      []string // optional: column-level SELECT/INSERT/UPDATE on TABLE only
 }

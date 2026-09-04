@@ -127,8 +127,10 @@ func (g *grantResource) Schema(ctx context.Context, req resource.SchemaRequest, 
 				},
 			},
 			"resource_type": schema.StringAttribute{
-				Description: "The type of resource being granted on: `TABLE`, `VIEW`, `CHANGE STREAM`, `TABLE FUNCTION`, " +
-					"`SEQUENCE`, or `SCHEMA`.",
+				Description: "The type of resource being granted on: `TABLE`, `VIEW`, or `CHANGE STREAM`. Spanner also " +
+					"supports granting on `SEQUENCE`, `SCHEMA`, and `TABLE FUNCTION`, but those aren't supported by this " +
+					"resource yet - there's no confirmed way to read such a grant back, which would make Read unable to " +
+					"detect drift and Terraform loop trying to re-create the resource on every plan.",
 				Required: true,
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.RequiresReplace(),

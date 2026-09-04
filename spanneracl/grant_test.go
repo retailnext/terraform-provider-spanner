@@ -63,6 +63,24 @@ func TestValidateGrantAcceptsEitherCase(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+func TestValidateGrantRejectsUnsupportedResourceTypes(t *testing.T) {
+	// SEQUENCE, SCHEMA, and TABLE FUNCTION are part of Spanner's documented
+	// grant vocabulary, but deliberately excluded from validResourceTypes:
+	// GrantExists has no confirmed INFORMATION_SCHEMA view to read a grant
+	// back on any of them, so allowing CreateGrant to accept them would let
+	// Terraform create a grant that Read can never detect, looping
+	// create->drop forever. See validResourceTypes' doc comment.
+	for _, resourceType := range []string{"SEQUENCE", "SCHEMA", "TABLE FUNCTION"} {
+		err := ValidateGrant(Grant{
+			RoleName:     "test_role",
+			Privilege:    "SELECT",
+			ResourceType: resourceType,
+			Resource:     "some_resource",
+		})
+		assert.Errorf(t, err, "expected ResourceType %q to be rejected", resourceType)
+	}
+}
+
 func TestQuoteQualifiedIdentifier(t *testing.T) {
 	quoted, err := quoteQualifiedIdentifier("my_table")
 	require.NoError(t, err)

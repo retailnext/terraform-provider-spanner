@@ -53,7 +53,7 @@ func validateIdentifier(name string) error {
 	}
 	for _, r := range name {
 		if !unicode.IsLetter(r) && !unicode.IsDigit(r) && r != '_' {
-			return fmt.Errorf("invalid character in identifier: %c", r)
+			return fmt.Errorf("invalid character in identifier: %q", r)
 		}
 	}
 	return nil

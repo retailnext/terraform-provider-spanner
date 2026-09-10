@@ -26,7 +26,7 @@ func newTestClientWithTableAndRole(t *testing.T) *Client {
 }
 
 func TestNormalizeGrant(t *testing.T) {
-	grant := normalizeGrant(Grant{
+	grant := NormalizeGrant(Grant{
 		RoleName:     "test_role",
 		Privilege:    "select",
 		ResourceType: "table",

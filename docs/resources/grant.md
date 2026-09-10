@@ -44,9 +44,9 @@ resource "spanner_grant" "app_reader_select_customer_columns" {
 
 ### Required
 
-- `privilege` (String) The privilege to grant: `SELECT`, `INSERT`, `UPDATE`, `DELETE`, `EXECUTE`, or `USAGE`. Which privileges apply to which `resource_type` is documented at https://cloud.google.com/spanner/docs/fgac-privileges.
+- `privilege` (String) The privilege to grant: `SELECT`, `INSERT`, `UPDATE`, `DELETE`, `EXECUTE`, or `USAGE`. Which privileges apply to which `resource_type` is documented at https://cloud.google.com/spanner/docs/fgac-privileges. Case-insensitive - changing only the case of an already-applied value does not plan a replace.
 - `resource` (String) The name of the resource, optionally schema-qualified as `schema_name.resource_name`.
-- `resource_type` (String) The type of resource being granted on: `TABLE`, `VIEW`, or `CHANGE STREAM`. Spanner also supports granting on `SEQUENCE`, `SCHEMA`, and `TABLE FUNCTION`, but those aren't supported by this resource yet - there's no confirmed way to read such a grant back, which would make Read unable to detect drift and Terraform loop trying to re-create the resource on every plan.
+- `resource_type` (String) The type of resource being granted on: `TABLE`, `VIEW`, or `CHANGE STREAM`. Spanner also supports granting on `SEQUENCE`, `SCHEMA`, and `TABLE FUNCTION`, but those aren't supported by this resource yet - there's no confirmed way to read such a grant back, which would make Read unable to detect drift and Terraform loop trying to re-create the resource on every plan. Case-insensitive - changing only the case of an already-applied value does not plan a replace.
 - `role_name` (String) The database role the privilege is granted to.
 
 ### Optional

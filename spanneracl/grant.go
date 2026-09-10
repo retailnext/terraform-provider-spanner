@@ -7,12 +7,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"slices"
 	"strings"
 	"text/template"
 
 	"cloud.google.com/go/spanner"
+	"github.com/hashicorp/terraform-plugin-log/tflog"
 	"google.golang.org/api/iterator"
 )
 
@@ -95,7 +95,7 @@ func (c *Client) DeleteGrant(ctx context.Context, grant Grant) error {
 // mirrors validResourceTypes, the resource types this package can actually
 // confirm a grant on.
 func (c *Client) GrantExists(ctx context.Context, grant Grant) (bool, error) {
-	grant = normalizeGrant(grant)
+	grant = NormalizeGrant(grant)
 	switch {
 	case len(grant.Columns) > 0:
 		return c.getGrantColumn(ctx, grant)
@@ -109,7 +109,7 @@ func (c *Client) GrantExists(ctx context.Context, grant Grant) (bool, error) {
 // getGrantTable reports whether grant.Privilege is granted on grant.Resource
 // as a whole (table/view level, no column list), via
 // INFORMATION_SCHEMA.TABLE_PRIVILEGES. grant.Privilege must already be
-// normalized (see normalizeGrant) - INFORMATION_SCHEMA.TABLE_PRIVILEGES
+// normalized (see NormalizeGrant) - INFORMATION_SCHEMA.TABLE_PRIVILEGES
 // stores privilege names uppercase.
 func (c *Client) getGrantTable(ctx context.Context, grant Grant) (bool, error) {
 	schema, resource := splitSchemaQualified(grant.Resource)
@@ -173,7 +173,7 @@ func (c *Client) getGrantChangeStream(ctx context.Context, grant Grant) (bool, e
 // match, since grant.Columns only needs to be a subset of what's actually
 // granted. If any column in grant.Columns is missing, this logs exactly
 // which ones before reporting false. grant.Privilege must already be
-// normalized (see normalizeGrant) - INFORMATION_SCHEMA.COLUMN_PRIVILEGES
+// normalized (see NormalizeGrant) - INFORMATION_SCHEMA.COLUMN_PRIVILEGES
 // stores privilege names uppercase.
 func (c *Client) getGrantColumn(ctx context.Context, grant Grant) (bool, error) {
 	schema, resource := splitSchemaQualified(grant.Resource)
@@ -214,29 +214,33 @@ func (c *Client) getGrantColumn(ctx context.Context, grant Grant) (bool, error) 
 		}
 	}
 	if len(missing) > 0 {
-		log.Printf("grant columns missing from INFORMATION_SCHEMA.COLUMN_PRIVILEGES "+
-			"(role %q, table %q, privilege %q): %v", grant.RoleName, grant.Resource, grant.Privilege, missing)
+		tflog.Debug(ctx, "grant columns missing from INFORMATION_SCHEMA.COLUMN_PRIVILEGES", map[string]any{
+			"role_name":       grant.RoleName,
+			"table":           grant.Resource,
+			"privilege":       grant.Privilege,
+			"missing_columns": missing,
+		})
 		return false, nil
 	}
 	return true, nil
 }
 
-// normalizeGrant returns a copy of grant with Privilege and ResourceType
+// NormalizeGrant returns a copy of grant with Privilege and ResourceType
 // uppercased, so CreateGrant/DeleteGrant/GrantExists all accept either case
 // and validate/compare consistently - Spanner's DDL keywords and its
 // INFORMATION_SCHEMA privilege/resource-type values are both uppercase
 // regardless of the case a caller writes GRANT/REVOKE statements in.
-func normalizeGrant(grant Grant) Grant {
+func NormalizeGrant(grant Grant) Grant {
 	grant.Privilege = strings.ToUpper(grant.Privilege)
 	grant.ResourceType = strings.ToUpper(grant.ResourceType)
 	return grant
 }
 
-// newGrantTemplateData normalizes and validates grant (via normalizeGrant/
+// newGrantTemplateData normalizes and validates grant (via NormalizeGrant/
 // ValidateGrant), validates its Resource/Columns identifiers, and returns a
 // grantTemplateData with everything pre-quoted for the DDL templates above.
 func newGrantTemplateData(grant Grant) (grantTemplateData, error) {
-	grant = normalizeGrant(grant)
+	grant = NormalizeGrant(grant)
 
 	if err := ValidateGrant(grant); err != nil {
 		return grantTemplateData{}, err
@@ -299,7 +303,7 @@ func splitSchemaQualified(name string) (schema, resource string) {
 // the Grant doc comment in domain.go), and the TABLE-specific rules -
 // column-level grants only apply to ResourceType TABLE, DELETE is never
 // column-level, and TABLE grants only use a privilege TABLE actually
-// supports. Normalizes grant (see normalizeGrant) internally first, so
+// supports. Normalizes grant (see NormalizeGrant) internally first, so
 // callers can pass Privilege/ResourceType in whatever case they were
 // written in - normalization only affects this function's own checks, not
 // the grant a caller holds, since Grant is passed by value.
@@ -309,7 +313,7 @@ func splitSchemaQualified(name string) (schema, resource string) {
 // newGrantTemplateData, since CreateGrant/DeleteGrant need them backtick-
 // quoted anyway and there was no reason to validate them twice.
 func ValidateGrant(grant Grant) error {
-	grant = normalizeGrant(grant)
+	grant = NormalizeGrant(grant)
 
 	if err := validateIdentifier(grant.RoleName); err != nil {
 		return fmt.Errorf("invalid role name %q: %w", grant.RoleName, err)
@@ -323,15 +327,17 @@ func ValidateGrant(grant Grant) error {
 	if grant.ResourceType != "TABLE" {
 		if len(grant.Columns) > 0 {
 			return fmt.Errorf("column-level grants are only allowed for TABLE resources")
-		} else {
-			return nil
 		}
+		if grant.Privilege != "SELECT" {
+			return fmt.Errorf("invalid privilege for %s grant: %q", grant.ResourceType, grant.Privilege)
+		}
+		return nil
 	}
 	if len(grant.Columns) > 0 && grant.Privilege == "DELETE" {
 		return fmt.Errorf("DELETE privilege cannot be column-level; table-level grant must not specify columns")
 	}
 	if !slices.Contains(tableGrantPrivileges, grant.Privilege) {
-		return fmt.Errorf("invalid privilege for table grant: %s", grant.Privilege)
+		return fmt.Errorf("invalid privilege for table grant: %q", grant.Privilege)
 	}
 	return nil
 }

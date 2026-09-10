@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
@@ -15,6 +16,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/setplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/retailnext/terraform-provider-spanner/spanneracl"
 )
@@ -73,6 +75,57 @@ func (m grantResourceModel) toGrant(ctx context.Context) (spanneracl.Grant, diag
 	return grant, diags
 }
 
+// caseInsensitiveRequiresReplace returns a plan modifier for Privilege/
+// ResourceType: it behaves exactly like stringplanmodifier.RequiresReplace
+// (same skip-on-create/skip-on-destroy/no-op-if-unchanged rules - mirrored
+// from its implementation) except that a change which only differs in case
+// is not treated as a change at all. This matches spanneracl.ValidateGrant
+// (via spanneracl.NormalizeGrant), which treats these two fields
+// case-insensitively - without this, changing "select" to "SELECT" in
+// config, or importing a lower-case ID and then writing the upper-case
+// spelling, would plan a spurious destroy/recreate even though the
+// underlying grant is unchanged.
+func caseInsensitiveRequiresReplace() planmodifier.String {
+	return caseInsensitiveRequiresReplaceModifier{}
+}
+
+type caseInsensitiveRequiresReplaceModifier struct{}
+
+func (m caseInsensitiveRequiresReplaceModifier) Description(_ context.Context) string {
+	return "If the value of this attribute changes (case-insensitively), Terraform will destroy and recreate the resource."
+}
+
+func (m caseInsensitiveRequiresReplaceModifier) MarkdownDescription(ctx context.Context) string {
+	return m.Description(ctx)
+}
+
+func (m caseInsensitiveRequiresReplaceModifier) PlanModifyString(_ context.Context, req planmodifier.StringRequest, resp *planmodifier.StringResponse) {
+	// Do not replace on resource creation.
+	if req.State.Raw.IsNull() {
+		return
+	}
+	// Do not replace on resource destroy.
+	if req.Plan.Raw.IsNull() {
+		return
+	}
+	// No change at all.
+	if req.PlanValue.Equal(req.StateValue) {
+		return
+	}
+	// An unknown value (e.g. derived from another resource's attribute)
+	// can't be case-folded against - conservatively require replace, same
+	// as the plan/state values simply differing.
+	if req.PlanValue.IsUnknown() || req.StateValue.IsUnknown() {
+		resp.RequiresReplace = true
+		return
+	}
+	// A change that is only a case difference is not a real change.
+	if strings.EqualFold(req.PlanValue.ValueString(), req.StateValue.ValueString()) {
+		return
+	}
+	resp.RequiresReplace = true
+}
+
 // grantID builds the synthetic ID used for this resource: a pipe-delimited
 // encoding of every field that identifies the grant. Every field
 // (including columns) is part of the grant's identity, since Spanner has
@@ -82,6 +135,8 @@ func (m grantResourceModel) toGrant(ctx context.Context) (spanneracl.Grant, diag
 // same columns in a different order produce the same ID instead of
 // spuriously planning a replace.
 func grantID(grant spanneracl.Grant) string {
+	grant = spanneracl.NormalizeGrant(grant)
+
 	columns := slices.Clone(grant.Columns)
 	slices.Sort(columns)
 
@@ -120,20 +175,30 @@ func (g *grantResource) Schema(ctx context.Context, req resource.SchemaRequest, 
 			"privilege": schema.StringAttribute{
 				Description: "The privilege to grant: `SELECT`, `INSERT`, `UPDATE`, `DELETE`, `EXECUTE`, or `USAGE`. " +
 					"Which privileges apply to which `resource_type` is documented at " +
-					"https://cloud.google.com/spanner/docs/fgac-privileges.",
+					"https://cloud.google.com/spanner/docs/fgac-privileges. Case-insensitive - changing only the " +
+					"case of an already-applied value does not plan a replace.",
 				Required: true,
+				Validators: []validator.String{
+					stringvalidator.OneOfCaseInsensitive(
+						"SELECT", "INSERT", "UPDATE", "DELETE", "EXECUTE", "USAGE",
+					),
+				},
 				PlanModifiers: []planmodifier.String{
-					stringplanmodifier.RequiresReplace(),
+					caseInsensitiveRequiresReplace(),
 				},
 			},
 			"resource_type": schema.StringAttribute{
 				Description: "The type of resource being granted on: `TABLE`, `VIEW`, or `CHANGE STREAM`. Spanner also " +
 					"supports granting on `SEQUENCE`, `SCHEMA`, and `TABLE FUNCTION`, but those aren't supported by this " +
 					"resource yet - there's no confirmed way to read such a grant back, which would make Read unable to " +
-					"detect drift and Terraform loop trying to re-create the resource on every plan.",
+					"detect drift and Terraform loop trying to re-create the resource on every plan. Case-insensitive - " +
+					"changing only the case of an already-applied value does not plan a replace.",
 				Required: true,
+				Validators: []validator.String{
+					stringvalidator.OneOfCaseInsensitive("TABLE", "VIEW", "CHANGE STREAM"),
+				},
 				PlanModifiers: []planmodifier.String{
-					stringplanmodifier.RequiresReplace(),
+					caseInsensitiveRequiresReplace(),
 				},
 			},
 			"resource": schema.StringAttribute{
@@ -167,7 +232,7 @@ func (g *grantResource) Configure(ctx context.Context, req resource.ConfigureReq
 	client, ok := req.ProviderData.(*spanneracl.Client)
 	if !ok {
 		resp.Diagnostics.AddError(
-			"Unexpected Data Source Configure Type",
+			"Unexpected Data Resource Configure Type",
 			fmt.Sprintf("Expected *spanneracl.Client, got: %T. Please report this issue to the provider developers.", req.ProviderData),
 		)
 
@@ -323,12 +388,31 @@ func (g *grantResource) ImportState(ctx context.Context, req resource.ImportStat
 		return
 	}
 
-	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), req.ID)...)
+	var columns []string
+	if parts[4] != "" {
+		columns = strings.Split(parts[4], ",")
+	}
+
+	grant := spanneracl.Grant{
+		RoleName:     parts[0],
+		Privilege:    parts[1],
+		ResourceType: parts[2],
+		Resource:     parts[3],
+		Columns:      columns,
+	}
+
+	// Not strictly required for correctness; just fail fast.
+	if err := spanneracl.ValidateGrant(grant); err != nil {
+		resp.Diagnostics.AddError("Invalid Import ID", err.Error())
+		return
+	}
+
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), grantID(grant))...)
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("role_name"), parts[0])...)
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("privilege"), parts[1])...)
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("resource_type"), parts[2])...)
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("resource"), parts[3])...)
-	if parts[4] != "" {
-		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("columns"), strings.Split(parts[4], ","))...)
+	if len(columns) > 0 {
+		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("columns"), columns)...)
 	}
 }

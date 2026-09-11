@@ -6,7 +6,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"unicode"
 
 	"cloud.google.com/go/spanner"
 	databasepb "cloud.google.com/go/spanner/admin/database/apiv1/databasepb"
@@ -58,8 +57,8 @@ func (c *Client) GetRole(ctx context.Context, roleName string) (Role, error) {
 
 // CreateRole creates a new database role.
 func (c *Client) CreateRole(ctx context.Context, role Role) error {
-	if err := validateRoleName(role.Name); err != nil {
-		return err
+	if err := validateIdentifier(role.Name); err != nil {
+		return fmt.Errorf("invalid role name %q: %w", role.Name, err)
 	}
 
 	return c.updateDatabaseDdl(ctx, fmt.Sprintf("CREATE ROLE `%s`", role.Name))
@@ -67,8 +66,8 @@ func (c *Client) CreateRole(ctx context.Context, role Role) error {
 
 // DeleteRole drops a database role.
 func (c *Client) DeleteRole(ctx context.Context, role Role) error {
-	if err := validateRoleName(role.Name); err != nil {
-		return err
+	if err := validateIdentifier(role.Name); err != nil {
+		return fmt.Errorf("invalid role name %q: %w", role.Name, err)
 	}
 
 	return c.updateDatabaseDdl(ctx, fmt.Sprintf("DROP ROLE `%s`", role.Name))
@@ -89,19 +88,5 @@ func (c *Client) updateDatabaseDdl(ctx context.Context, statement string) error 
 		return fmt.Errorf("failed to apply ddl statement %q: %w", statement, err)
 	}
 
-	return nil
-}
-
-// validateRoleName only allows alphanumeric characters and underscores in
-// role names.
-func validateRoleName(name string) error {
-	if name == "" {
-		return errors.New("role name must not be empty")
-	}
-	for _, r := range name {
-		if !unicode.IsLetter(r) && !unicode.IsDigit(r) && r != '_' {
-			return fmt.Errorf("invalid character in role name: %c", r)
-		}
-	}
 	return nil
 }

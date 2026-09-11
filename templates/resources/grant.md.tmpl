@@ -1,0 +1,28 @@
+---
+page_title: "{{.Type}} {{.Name}} - {{.ProviderName}}"
+subcategory: ""
+description: |-
+{{ .Description | plainmarkdown | trimspace | prefixlines "  " }}
+---
+
+# {{.Type}} {{.Name}}
+
+Manages a single privilege grant on a Spanner resource to a database role, as part of
+[fine-grained access control (FGAC)](https://cloud.google.com/spanner/docs/fgac-about). Which
+privileges are valid for a given `resource_type` is documented at
+https://cloud.google.com/spanner/docs/fgac-privileges. Spanner has no `ALTER GRANT` DDL, so
+changing any attribute (including `columns`) forces the grant to be revoked and re-granted rather
+than updated in place.
+
+Granting a role to another role (role membership) is not supported by this resource - only
+resource privilege grants are.
+
+## Example Usage
+
+{{ tffile "examples/resources/spanner_grant/resource.tf" }}
+
+{{ .SchemaMarkdown | trimspace }}
+
+## Import
+
+{{ codefile "shell" "examples/resources/spanner_grant/import.sh" }}

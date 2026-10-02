@@ -21,7 +21,7 @@ import (
 // https://github.com/GoogleCloudPlatform/cloud-spanner-emulator/issues/350)
 // run against it when set, and are skipped otherwise. Authenticates with
 // Application Default Credentials; the principal needs DDL rights on the
-// database (e.g. roles/spanner.databaseAdmin).
+// database (roles/spanner.databaseUser grants it).
 const realSpannerTestDatabaseEnv = "SPANNER_TEST_DATABASE"
 
 // realSpannerFixture is a table plus a set of roles, all uniquely named for

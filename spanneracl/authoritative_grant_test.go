@@ -115,6 +115,8 @@ func TestGetAllRolePermissionsPerIdMissingResource(t *testing.T) {
 
 	_, err := client.GetAllRolePermissionsPerId(context.Background(), "no_such_table", "TABLE")
 	assert.ErrorIs(t, err, ErrResourceNotFound)
+	_, err = client.GetColumnLevelOnlyPermissionsPerId(context.Background(), "no_such_table", "TABLE")
+	assert.ErrorIs(t, err, ErrResourceNotFound)
 }
 
 // The tests below need INFORMATION_SCHEMA.TABLE_PRIVILEGES, which the
@@ -206,9 +208,7 @@ func TestApplyAuthoritativeBindingRevokesColumnLevelGrants(t *testing.T) {
 
 	id, err := ParseIdentifier(f.table, "TABLE")
 	require.NoError(t, err)
-	perms, err := f.client.getAllRolePermissionsPerId(ctx, *id)
-	require.NoError(t, err)
-	columnPerms, err := f.client.getColumnLevelOnlyPermissions(ctx, *id, perms)
+	columnPerms, err := f.client.GetColumnLevelOnlyPermissionsPerId(ctx, f.table, "TABLE")
 	require.NoError(t, err)
 	assert.ElementsMatch(t, []string{"name"}, columnPerms[role]["SELECT"])
 	assert.ElementsMatch(t, []string{"id", "name"}, columnPerms[role]["INSERT"])
@@ -218,7 +218,7 @@ func TestApplyAuthoritativeBindingRevokesColumnLevelGrants(t *testing.T) {
 		{Role: role, Privileges: []string{"SELECT"}},
 	}))
 
-	perms, err = f.client.getAllRolePermissionsPerId(ctx, *id)
+	perms, err := f.client.getAllRolePermissionsPerId(ctx, *id)
 	require.NoError(t, err)
 	assert.Equal(t, map[string][]string{role: {"SELECT"}}, perms)
 	columnPerms, err = f.client.getColumnLevelOnlyPermissions(ctx, *id, perms)

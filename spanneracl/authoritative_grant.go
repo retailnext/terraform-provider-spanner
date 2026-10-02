@@ -303,6 +303,31 @@ func (c *Client) getRolePermissionsForTableOrView(ctx context.Context, id Parsed
 	return permissions, nil
 }
 
+// GetColumnLevelOnlyPermissionsPerId returns every column-level-only grant on
+// identifier, as role -> privilege -> columns: grants of a privilege on specific
+// columns to a role that doesn't also hold that privilege on the whole table.
+// ApplyAuthoritativeBinding revokes all of them, so a non-empty result means
+// the table has drifted from any authoritative binding. Only tables have
+// column-level grants, so a VIEW always returns an empty map. Returns an error
+// wrapping ErrResourceNotFound if identifier doesn't exist as resourceType.
+func (c *Client) GetColumnLevelOnlyPermissionsPerId(ctx context.Context, identifier, resourceType string) (map[string]map[string][]string, error) {
+	parsedIdentifier, err := ParseIdentifier(identifier, resourceType)
+	if err != nil {
+		return nil, err
+	}
+	if err := c.checkResourceExists(ctx, *parsedIdentifier); err != nil {
+		return nil, err
+	}
+	if parsedIdentifier.ResourceType != "TABLE" {
+		return map[string]map[string][]string{}, nil
+	}
+	tableLevel, err := c.getAllRolePermissionsPerId(ctx, *parsedIdentifier)
+	if err != nil {
+		return nil, err
+	}
+	return c.getColumnLevelOnlyPermissions(ctx, *parsedIdentifier, tableLevel)
+}
+
 // getColumnLevelOnlyPermissions returns every column-level-only grant on id, as
 // role -> privilege -> columns, read from INFORMATION_SCHEMA.COLUMN_PRIVILEGES.
 // tableLevel is id's table-level grants (GetAllRolePermissionsPerId's result).

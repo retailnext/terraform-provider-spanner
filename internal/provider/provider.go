@@ -204,6 +204,7 @@ func (p *spannerProvider) Resources(ctx context.Context) []func() resource.Resou
 	return []func() resource.Resource{
 		NewRoleResource,
 		NewGrantResource,
+		NewTableGrantsResource,
 	}
 }
 

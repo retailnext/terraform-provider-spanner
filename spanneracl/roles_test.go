@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"testing"
 
+	"cloud.google.com/go/spanner"
 	database "cloud.google.com/go/spanner/admin/database/apiv1"
 	databasepb "cloud.google.com/go/spanner/admin/database/apiv1/databasepb"
 	instance "cloud.google.com/go/spanner/admin/instance/apiv1"
@@ -143,4 +144,65 @@ func TestDeleteRole(t *testing.T) {
 
 	require.NoError(t, client.CreateRole(ctx, inputRole))
 	require.NoError(t, client.DeleteRole(ctx, inputRole))
+}
+
+// chunkTestTables returns n CREATE TABLE statements for tables chunk_<i>.
+func chunkTestTables(n int) []string {
+	statements := make([]string, n)
+	for i := range n {
+		statements[i] = fmt.Sprintf("CREATE TABLE `chunk_%02d` (id INT64) PRIMARY KEY (id)", i)
+	}
+	return statements
+}
+
+// listChunkTestTables returns the names of every chunk_* table, sorted.
+func listChunkTestTables(t *testing.T, client *Client) []string {
+	iter := client.DataClient.Single().Query(context.Background(), spanner.Statement{
+		SQL: `SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES
+				WHERE TABLE_SCHEMA = '' AND STARTS_WITH(TABLE_NAME, 'chunk_') ORDER BY TABLE_NAME`,
+	})
+	defer iter.Stop()
+
+	var names []string
+	require.NoError(t, iter.Do(func(row *spanner.Row) error {
+		var name string
+		if err := row.Columns(&name); err != nil {
+			return err
+		}
+		names = append(names, name)
+		return nil
+	}))
+	return names
+}
+
+// TestUpdateDatabaseDdlChunksLargeBatches checks that more than
+// maxDdlStatementsPerBatch statements are all applied, in order, across chunks.
+func TestUpdateDatabaseDdlChunksLargeBatches(t *testing.T) {
+	client := newTestClient(t)
+	statements := chunkTestTables(maxDdlStatementsPerBatch*2 + 5)
+
+	require.NoError(t, client.updateDatabaseDdl(context.Background(), statements...))
+
+	names := listChunkTestTables(t, client)
+	assert.Len(t, names, len(statements))
+}
+
+// TestUpdateDatabaseDdlFailedChunkKeepsEarlierChunks checks the documented
+// partial-application semantics: when a later chunk fails, earlier chunks stay
+// applied, the failed chunk applies nothing (a duplicate CREATE TABLE fails
+// server-side validation, which rejects the whole request), and the error says
+// how many statements were already applied.
+func TestUpdateDatabaseDdlFailedChunkKeepsEarlierChunks(t *testing.T) {
+	client := newTestClient(t)
+	statements := chunkTestTables(maxDdlStatementsPerBatch + 1)
+	// Second chunk: a valid new table followed by a duplicate of chunk_00.
+	statements = append(statements, statements[0])
+
+	err := client.updateDatabaseDdl(context.Background(), statements...)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, fmt.Sprintf("the first %d of %d statements", maxDdlStatementsPerBatch, len(statements)))
+
+	names := listChunkTestTables(t, client)
+	assert.Len(t, names, maxDdlStatementsPerBatch)
+	assert.NotContains(t, names, fmt.Sprintf("chunk_%02d", maxDdlStatementsPerBatch))
 }

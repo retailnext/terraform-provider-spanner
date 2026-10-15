@@ -96,11 +96,13 @@ func ParseIdentifier(identifier string, resourceType string) (*ParsedIdentifier,
 // revokes every table-level grant not in bindings, and grants everything in
 // bindings that's missing. Each role may appear in at most one binding.
 //
-// Every GRANT/REVOKE is rendered up front and applied in order via
-// updateDatabaseDdl, in UpdateDatabaseDdl batches of at most
-// maxDdlStatementsPerBatch. That is NOT a transaction - Spanner has no
-// transactional DDL, and a failed batch leaves earlier batches applied (see
-// updateDatabaseDdl).
+// Every GRANT/REVOKE is rendered up front and applied in order as a single
+// UpdateDatabaseDdl request via updateDatabaseDdl, so a statement the server
+// rejects up front (e.g. a GRANT to a role that does not exist) rejects the
+// whole reconciliation with nothing applied. That is NOT a transaction -
+// Spanner has no transactional DDL, and an execution-time failure leaves the
+// statements before it applied (see updateDatabaseDdl); calling this again
+// converges, since it always diffs against the live grants.
 func (c *Client) ApplyAuthoritativeBinding(ctx context.Context, identifier string, resourceType string, bindings []*AuthoritativeBinding) error {
 	parsedIdentifier, err := ParseIdentifier(identifier, resourceType)
 	if err != nil {
@@ -144,9 +146,8 @@ func (c *Client) ApplyAuthoritativeBinding(ctx context.Context, identifier strin
 		return err
 	}
 
-	// Collect every statement first, then apply them as one ordered sequence,
-	// which updateDatabaseDdl may split across several batches - so a failure in
-	// a later batch leaves earlier ones applied (see the doc comment above).
+	// Collect every statement first, then apply them as one ordered sequence in
+	// a single updateDatabaseDdl request (see the doc comment above).
 	// Order matters: column-level revokes, then table-level revokes, then grants.
 	var statements []string
 	addStatement := func(render func(Grant) (string, error), grant Grant) error {

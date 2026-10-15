@@ -138,6 +138,7 @@ func (r *tableGrantsResource) Schema(_ context.Context, _ resource.SchemaRequest
 							ElementType: types.StringType,
 							Required:    true,
 							Validators: []validator.Set{
+								setvalidator.SizeAtLeast(1),
 								setvalidator.ValueStringsAre(
 									stringvalidator.OneOf("SELECT", "INSERT", "UPDATE", "DELETE"),
 								),

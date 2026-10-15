@@ -11,6 +11,20 @@ import (
 // ErrRoleNotFound is returned when a database role does not exist.
 var ErrRoleNotFound = errors.New("role not found")
 
+// ErrResourceNotFound is returned when a table or view that a grant targets does not exist.
+var ErrResourceNotFound = errors.New("resource not found")
+
+// authGrantResourceTypes and authGrantPrivilegesByType deliberately exclude SCHEMA:
+// see the "Out of Scope" doc comment at the top of authoritative_grant.go for why (no confirmed
+// INFORMATION_SCHEMA view exists to read schema-level USAGE grants back, so
+// GetAllRolePermissionsPerId could never detect one - the same class of gap that got
+// SEQUENCE/SCHEMA/TABLE FUNCTION dropped from validResourceTypes below).
+var authGrantResourceTypes = []string{"TABLE", "VIEW"}
+var authGrantPrivilegesByType = map[string][]string{
+	"TABLE": {"SELECT", "INSERT", "UPDATE", "DELETE"},
+	"VIEW":  {"SELECT"},
+}
+
 // Role represents a Spanner database role used for fine-grained access
 // control (FGAC). Unlike ScyllaDB roles, Spanner database roles carry no
 // attributes of their own (no login/superuser flags): they are purely

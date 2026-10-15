@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"testing"
 
+	"cloud.google.com/go/spanner"
 	database "cloud.google.com/go/spanner/admin/database/apiv1"
 	databasepb "cloud.google.com/go/spanner/admin/database/apiv1/databasepb"
 	instance "cloud.google.com/go/spanner/admin/instance/apiv1"
@@ -143,4 +144,59 @@ func TestDeleteRole(t *testing.T) {
 
 	require.NoError(t, client.CreateRole(ctx, inputRole))
 	require.NoError(t, client.DeleteRole(ctx, inputRole))
+}
+
+// ddlTestTables returns n CREATE TABLE statements for tables ddltest_<i>.
+func ddlTestTables(n int) []string {
+	statements := make([]string, n)
+	for i := range n {
+		statements[i] = fmt.Sprintf("CREATE TABLE `ddltest_%02d` (id INT64) PRIMARY KEY (id)", i)
+	}
+	return statements
+}
+
+// listDdlTestTables returns the names of every ddltest_* table, sorted.
+func listDdlTestTables(t *testing.T, client *Client) []string {
+	iter := client.DataClient.Single().Query(context.Background(), spanner.Statement{
+		SQL: `SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES
+				WHERE TABLE_SCHEMA = '' AND STARTS_WITH(TABLE_NAME, 'ddltest_') ORDER BY TABLE_NAME`,
+	})
+	defer iter.Stop()
+
+	var names []string
+	require.NoError(t, iter.Do(func(row *spanner.Row) error {
+		var name string
+		if err := row.Columns(&name); err != nil {
+			return err
+		}
+		names = append(names, name)
+		return nil
+	}))
+	return names
+}
+
+// TestUpdateDatabaseDdlLargeBatch checks that a request of well over 20
+// statements is applied in full, in one UpdateDatabaseDdl request.
+func TestUpdateDatabaseDdlLargeBatch(t *testing.T) {
+	client := newTestClient(t)
+	statements := ddlTestTables(45)
+
+	require.NoError(t, client.updateDatabaseDdl(context.Background(), statements...))
+
+	names := listDdlTestTables(t, client)
+	assert.Len(t, names, len(statements))
+}
+
+// TestUpdateDatabaseDdlRejectedRequestAppliesNothing checks that a statement
+// failing server-side validation (a duplicate CREATE TABLE) at the end of a
+// large request rejects the whole request, leaving none of the valid
+// statements before it applied.
+func TestUpdateDatabaseDdlRejectedRequestAppliesNothing(t *testing.T) {
+	client := newTestClient(t)
+	statements := ddlTestTables(25)
+	statements = append(statements, statements[0])
+
+	require.Error(t, client.updateDatabaseDdl(context.Background(), statements...))
+
+	assert.Empty(t, listDdlTestTables(t, client))
 }

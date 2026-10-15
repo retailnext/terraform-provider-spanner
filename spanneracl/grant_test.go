@@ -152,8 +152,8 @@ func TestCreateGrantInvalidResourceType(t *testing.T) {
 // skipGrantExistsEmulatorGap marks a test as skipped due to a known
 // cloud-spanner-emulator limitation: INFORMATION_SCHEMA.TABLE_PRIVILEGES
 // (and, by the same gap, .COLUMN_PRIVILEGES) does not exist in the
-// emulator's schema catalog at all - the same class of gap documented for
-// INFORMATION_SCHEMA.ROLES in CLAUDE.md and skipGetRoleEmulatorGap. GrantExists
+// emulator's schema catalog at all - the same class of gap as
+// INFORMATION_SCHEMA.ROLES (see skipGetRoleEmulatorGap). GrantExists
 // is written against real Spanner's documented INFORMATION_SCHEMA behavior;
 // unskip once the upstream issue is resolved or when testing against a real
 // GCP project.

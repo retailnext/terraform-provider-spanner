@@ -1,0 +1,33 @@
+---
+page_title: "{{.Type}} {{.Name}} - {{.ProviderName}}"
+subcategory: ""
+description: |-
+{{ .Description | plainmarkdown | trimspace | prefixlines "  " }}
+---
+
+# {{.Type}} {{.Name}}
+
+Authoritatively manages every privilege grant on one Spanner table, as part of
+[fine-grained access control (FGAC)](https://cloud.google.com/spanner/docs/fgac-about). The
+`grant` blocks are the complete set of table-level privileges on the table: on every apply, any
+grant not listed is revoked and any listed grant that's missing is granted. Valid privileges are
+`SELECT`, `INSERT`, `UPDATE` and `DELETE` (uppercase); each role may appear in only one `grant`
+block.
+
+~> **Warning:** This resource owns *every* grant on the table. Grants created outside Terraform,
+grants managed by `spanner_grant` resources on the same table, and all column-level grants on the
+table are revoked on apply. Destroying this resource revokes every grant on the table, from every
+role. Don't combine it with `spanner_grant` resources targeting the same table.
+
+Changing `table` or `schema` forces replacement. If the table is dropped outside Terraform, the
+resource is removed from state on the next refresh.
+
+## Example Usage
+
+{{ tffile "examples/resources/spanner_table_grants/resource.tf" }}
+
+{{ .SchemaMarkdown | trimspace }}
+
+## Import
+
+{{ codefile "shell" "examples/resources/spanner_table_grants/import.sh" }}

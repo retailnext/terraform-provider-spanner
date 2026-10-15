@@ -6,18 +6,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"slices"
 
 	"cloud.google.com/go/spanner"
 	databasepb "cloud.google.com/go/spanner/admin/database/apiv1/databasepb"
 	"google.golang.org/api/iterator"
 )
-
-// maxDdlStatementsPerBatch caps how many statements updateDatabaseDdl sends in
-// one UpdateDatabaseDdl request. Spanner's published quotas list no per-request
-// statement count (only a 10 MiB size limit), but a 20-statement limit for
-// GRANT/REVOKE batches is set as precaution and to avoid long-running requests.
-const maxDdlStatementsPerBatch = 20
 
 // GetRole looks up a database role by name via INFORMATION_SCHEMA.ROLES.
 //
@@ -80,36 +73,19 @@ func (c *Client) DeleteRole(ctx context.Context, role Role) error {
 	return c.updateDatabaseDdl(ctx, fmt.Sprintf("DROP ROLE `%s`", role.Name))
 }
 
-// updateDatabaseDdl issues one or more DDL statements against the database in
-// order, in chunks of at most maxDdlStatementsPerBatch, waiting for each
-// chunk's long-running operation to complete before sending the next.
+// updateDatabaseDdl issues one or more DDL statements against the database as
+// a single UpdateDatabaseDdl request and waits for its long-running operation
+// to complete. Spanner's published quotas list no per-request statement count
+// (only a 10 MiB size limit on a schema change), so statements are never split
+// across requests.
 //
-// This is NOT atomic, within a chunk or across chunks. Per the
-// UpdateDatabaseDdl API docs, the server checks that every statement in a
-// request is executable (syntax, referenced objects exist) before enqueueing
-// any of them - so those failures reject that whole chunk with nothing in it
-// applied - but statements are then applied "in order but not necessarily all
-// at once", and if one fails at execution time the rest of its chunk is
-// cancelled while the ones before it stay applied. Earlier chunks are never
-// rolled back, and later chunks are not sent once one fails.
+// This is NOT atomic. Per the UpdateDatabaseDdl API docs, the server checks
+// that every statement in the request is executable (syntax, referenced
+// objects exist) before enqueueing any of them - so those failures reject the
+// whole request with nothing applied - but statements are then applied "in
+// order but not necessarily all at once", and if one fails at execution time
+// the rest are cancelled while the ones before it stay applied.
 func (c *Client) updateDatabaseDdl(ctx context.Context, statements ...string) error {
-	applied := 0
-	for chunk := range slices.Chunk(statements, maxDdlStatementsPerBatch) {
-		if err := c.updateDatabaseDdlBatch(ctx, chunk); err != nil {
-			if applied > 0 {
-				return fmt.Errorf("%w (in addition, the first %d of %d statements, in earlier batches, were already applied and are not rolled back)",
-					err, applied, len(statements))
-			}
-			return err
-		}
-		applied += len(chunk)
-	}
-	return nil
-}
-
-// updateDatabaseDdlBatch sends statements as a single UpdateDatabaseDdl request
-// and waits for its long-running operation to complete.
-func (c *Client) updateDatabaseDdlBatch(ctx context.Context, statements []string) error {
 	op, err := c.AdminClient.UpdateDatabaseDdl(ctx, &databasepb.UpdateDatabaseDdlRequest{
 		Database:   c.DatabasePath,
 		Statements: statements,
@@ -120,9 +96,9 @@ func (c *Client) updateDatabaseDdlBatch(ctx context.Context, statements []string
 
 	// A submit error means the request was rejected before being enqueued, so
 	// nothing in it was applied. A Wait error can come after some leading
-	// statements of this batch already committed, so say so explicitly.
+	// statements already committed, so say so explicitly.
 	if err := op.Wait(ctx); err != nil {
-		return fmt.Errorf("failed to apply ddl statements %q (some leading statements of this batch may already be applied): %w",
+		return fmt.Errorf("failed to apply ddl statements %q (some leading statements may already be applied): %w",
 			statements, err)
 	}
 

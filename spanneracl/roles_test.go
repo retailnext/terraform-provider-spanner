@@ -146,20 +146,20 @@ func TestDeleteRole(t *testing.T) {
 	require.NoError(t, client.DeleteRole(ctx, inputRole))
 }
 
-// chunkTestTables returns n CREATE TABLE statements for tables chunk_<i>.
-func chunkTestTables(n int) []string {
+// ddlTestTables returns n CREATE TABLE statements for tables ddltest_<i>.
+func ddlTestTables(n int) []string {
 	statements := make([]string, n)
 	for i := range n {
-		statements[i] = fmt.Sprintf("CREATE TABLE `chunk_%02d` (id INT64) PRIMARY KEY (id)", i)
+		statements[i] = fmt.Sprintf("CREATE TABLE `ddltest_%02d` (id INT64) PRIMARY KEY (id)", i)
 	}
 	return statements
 }
 
-// listChunkTestTables returns the names of every chunk_* table, sorted.
-func listChunkTestTables(t *testing.T, client *Client) []string {
+// listDdlTestTables returns the names of every ddltest_* table, sorted.
+func listDdlTestTables(t *testing.T, client *Client) []string {
 	iter := client.DataClient.Single().Query(context.Background(), spanner.Statement{
 		SQL: `SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES
-				WHERE TABLE_SCHEMA = '' AND STARTS_WITH(TABLE_NAME, 'chunk_') ORDER BY TABLE_NAME`,
+				WHERE TABLE_SCHEMA = '' AND STARTS_WITH(TABLE_NAME, 'ddltest_') ORDER BY TABLE_NAME`,
 	})
 	defer iter.Stop()
 
@@ -175,34 +175,28 @@ func listChunkTestTables(t *testing.T, client *Client) []string {
 	return names
 }
 
-// TestUpdateDatabaseDdlChunksLargeBatches checks that more than
-// maxDdlStatementsPerBatch statements are all applied, in order, across chunks.
-func TestUpdateDatabaseDdlChunksLargeBatches(t *testing.T) {
+// TestUpdateDatabaseDdlLargeBatch checks that a request of well over 20
+// statements is applied in full, in one UpdateDatabaseDdl request.
+func TestUpdateDatabaseDdlLargeBatch(t *testing.T) {
 	client := newTestClient(t)
-	statements := chunkTestTables(maxDdlStatementsPerBatch*2 + 5)
+	statements := ddlTestTables(45)
 
 	require.NoError(t, client.updateDatabaseDdl(context.Background(), statements...))
 
-	names := listChunkTestTables(t, client)
+	names := listDdlTestTables(t, client)
 	assert.Len(t, names, len(statements))
 }
 
-// TestUpdateDatabaseDdlFailedChunkKeepsEarlierChunks checks the documented
-// partial-application semantics: when a later chunk fails, earlier chunks stay
-// applied, the failed chunk applies nothing (a duplicate CREATE TABLE fails
-// server-side validation, which rejects the whole request), and the error says
-// how many statements were already applied.
-func TestUpdateDatabaseDdlFailedChunkKeepsEarlierChunks(t *testing.T) {
+// TestUpdateDatabaseDdlRejectedRequestAppliesNothing checks that a statement
+// failing server-side validation (a duplicate CREATE TABLE) at the end of a
+// large request rejects the whole request, leaving none of the valid
+// statements before it applied.
+func TestUpdateDatabaseDdlRejectedRequestAppliesNothing(t *testing.T) {
 	client := newTestClient(t)
-	statements := chunkTestTables(maxDdlStatementsPerBatch + 1)
-	// Second chunk: a valid new table followed by a duplicate of chunk_00.
+	statements := ddlTestTables(25)
 	statements = append(statements, statements[0])
 
-	err := client.updateDatabaseDdl(context.Background(), statements...)
-	require.Error(t, err)
-	assert.ErrorContains(t, err, fmt.Sprintf("the first %d of %d statements", maxDdlStatementsPerBatch, len(statements)))
+	require.Error(t, client.updateDatabaseDdl(context.Background(), statements...))
 
-	names := listChunkTestTables(t, client)
-	assert.Len(t, names, maxDdlStatementsPerBatch)
-	assert.NotContains(t, names, fmt.Sprintf("chunk_%02d", maxDdlStatementsPerBatch))
+	assert.Empty(t, listDdlTestTables(t, client))
 }

@@ -339,10 +339,9 @@ func TestApplyAuthoritativeBindingView(t *testing.T) {
 	assert.Empty(t, perms)
 }
 
-// TestApplyAuthoritativeBindingLargeBatch applies a reconciliation that needs
-// more than maxDdlStatementsPerBatch statements (6 roles x 4 missing table
-// privileges = 24 GRANTs), so updateDatabaseDdl sends it as more than one
-// UpdateDatabaseDdl batch, and checks every grant from every batch landed.
+// TestApplyAuthoritativeBindingLargeBatch applies a reconciliation of more
+// than 20 statements (6 roles x 4 missing table privileges = 24 GRANTs) in a
+// single UpdateDatabaseDdl request, and checks every grant landed.
 func TestApplyAuthoritativeBindingLargeBatch(t *testing.T) {
 	f := newRealSpannerFixture(t, 6)
 	ctx := context.Background()

@@ -22,6 +22,10 @@ role. Don't combine it with `spanner_grant` resources targeting the same table.
 Changing `table` or `schema` forces replacement. If the table is dropped outside Terraform, the
 resource is removed from state on the next refresh.
 
+`table` and `schema` must use the same case the table and schema were created with. Spanner itself
+resolves these names case-insensitively, but this resource looks the table and its grants up in
+`INFORMATION_SCHEMA` by exact name, so `MyTable` doesn't match a table created as `mytable`.
+
 ## Example Usage
 
 ```terraform
@@ -60,12 +64,12 @@ resource "spanner_table_grants" "sales_invoices" {
 
 ### Required
 
-- `table` (String) The name of the table whose grants this resource manages, without any schema prefix (use `schema` for a table in a named schema). Letters, digits and underscores only. The table must already exist. Changing this forces a new resource: grants on the old table are all revoked and the new table's grants are set.
+- `table` (String) The name of the table whose grants this resource manages, without any schema prefix (use `schema` for a table in a named schema). Letters, digits and underscores only. The table must already exist, and the name must use the same case the table was created with: Spanner resolves names case-insensitively, but this resource looks the table and its grants up by exact name. Changing this forces a new resource: grants on the old table are all revoked and the new table's grants are set.
 
 ### Optional
 
 - `grant` (Block Set) One role and the complete set of table-level privileges it holds on the table. At least one `grant` block is required, and each role may appear in only one block. A role not listed in any block ends up with no privileges on the table. (see [below for nested schema](#nestedblock--grant))
-- `schema` (String) The named schema containing `table`. Omit it for a table in the default schema. Letters, digits and underscores only. Changing this forces a new resource.
+- `schema` (String) The named schema containing `table`. Omit it for a table in the default schema. Letters, digits and underscores only, in the same case the schema was created with. Changing this forces a new resource.
 
 ### Read-Only
 

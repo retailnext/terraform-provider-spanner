@@ -63,6 +63,9 @@ func (b *AuthoritativeBinding) Normalize() error {
 
 // ParseIdentifier parses a resource identifier into its components based on the resource type.
 // The expected format for the identifier is either "schema.resourceName" or "resourceName" depending on whether a schema is specified.
+// Names are kept as given: although Spanner resolves table, view and schema names
+// case-insensitively, INFORMATION_SCHEMA stores them in the case they were created with and
+// this package's lookups compare exactly, so the identifier must use that case.
 func ParseIdentifier(identifier string, resourceType string) (*ParsedIdentifier, error) {
 	parsed := ParsedIdentifier{
 		ResourceType: strings.ToUpper(resourceType),
@@ -398,8 +401,10 @@ var informationSchemaTableTypes = map[string]string{
 // checkResourceTableOrViewExists reports whether id names an existing object of id's
 // ResourceType, via INFORMATION_SCHEMA.TABLES (which lists both tables and
 // views). Returns an error wrapping ErrResourceNotFound if nothing by that
-// name exists, or a type-mismatch error if it exists as the other kind (e.g.
-// ResourceType TABLE for a view).
+// name exists, or if it exists only as the other kind (e.g. ResourceType TABLE
+// for a view) - the error message then names the actual kind. When nothing
+// matches exactly but a name differing only in case exists, the not-found
+// error suggests that name, since the lookup is case-sensitive.
 func (c *Client) checkResourceTableOrViewExists(ctx context.Context, id ParsedIdentifier) error {
 	wantType, ok := informationSchemaTableTypes[id.ResourceType]
 	if !ok {
@@ -419,7 +424,11 @@ func (c *Client) checkResourceTableOrViewExists(ctx context.Context, id ParsedId
 
 	row, err := iter.Next()
 	if errors.Is(err, iterator.Done) {
-		return fmt.Errorf("%s %q: %w", strings.ToLower(id.ResourceType), id.Original, ErrResourceNotFound)
+		notFound := fmt.Errorf("%s %q: %w", strings.ToLower(id.ResourceType), id.Original, ErrResourceNotFound)
+		if match := c.findCaseInsensitiveMatch(ctx, id); match != "" {
+			return fmt.Errorf("%w; found %q - names must use the case the object was created with", notFound, match)
+		}
+		return notFound
 	}
 	if err != nil {
 		return fmt.Errorf("failed to look up %q in INFORMATION_SCHEMA.TABLES: %w", id.Original, err)
@@ -429,7 +438,36 @@ func (c *Client) checkResourceTableOrViewExists(ctx context.Context, id ParsedId
 		return fmt.Errorf("failed to scan INFORMATION_SCHEMA.TABLES row: %w", err)
 	}
 	if tableType != wantType {
-		return fmt.Errorf("%q is a %s, not a %s", id.Original, tableType, wantType)
+		return fmt.Errorf("%q is a %s, not a %s: %w", id.Original, tableType, wantType, ErrResourceNotFound)
 	}
 	return nil
+}
+
+// findCaseInsensitiveMatch returns the stored name ("table" or "schema.table")
+// of a table or view that matches id ignoring case, or "" if there is none. It
+// only feeds a hint into a not-found error, so a failed lookup also returns "".
+func (c *Client) findCaseInsensitiveMatch(ctx context.Context, id ParsedIdentifier) string {
+	stmt := spanner.Statement{
+		SQL: `SELECT TABLE_SCHEMA, TABLE_NAME FROM INFORMATION_SCHEMA.TABLES
+				WHERE LOWER(TABLE_SCHEMA) = LOWER(@table_schema) AND LOWER(TABLE_NAME) = LOWER(@table_name)`,
+		Params: map[string]any{
+			"table_schema": id.Schema,
+			"table_name":   id.ResourceName,
+		},
+	}
+	iter := c.DataClient.Single().Query(ctx, stmt)
+	defer iter.Stop()
+
+	row, err := iter.Next()
+	if err != nil {
+		return ""
+	}
+	var schema, name string
+	if err := row.Columns(&schema, &name); err != nil {
+		return ""
+	}
+	if schema == "" {
+		return name
+	}
+	return schema + "." + name
 }

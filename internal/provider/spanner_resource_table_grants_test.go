@@ -38,11 +38,22 @@ func testGrant(role string, privileges ...string) grantModel {
 	return grantModel{Role: types.StringValue(role), Privileges: types.SetValueMust(types.StringType, elems)}
 }
 
+// grantSet builds the grant block set holding grants.
+func grantSet(t *testing.T, grants ...grantModel) types.Set {
+	t.Helper()
+	set, diags := types.SetValueFrom(context.Background(), grantObjectType, grants)
+	require.False(t, diags.HasError(), diags)
+	return set
+}
+
 // tableGrantsPlan encodes model as a plan for spanner_table_grants' schema.
 func tableGrantsPlan(t *testing.T, model tableGrantsResourceModel) tfsdk.Plan {
 	t.Helper()
 	ctx := context.Background()
 	s := tableGrantsSchemaResponse(t).Schema
+	if model.Grants.ElementType(ctx) == nil {
+		model.Grants = types.SetNull(grantObjectType)
+	}
 	if model.ColumnLevelGrants.ElementType(ctx) == nil {
 		model.ColumnLevelGrants = types.SetNull(types.StringType)
 	}
@@ -59,7 +70,7 @@ func TestTableGrantsModelRoundTripsThroughSchema(t *testing.T) {
 		ID:     types.StringValue("my_schema.orders"),
 		Table:  types.StringValue("orders"),
 		Schema: types.StringValue("my_schema"),
-		Grants: Grants{testGrant("reader", "SELECT"), testGrant("writer", "INSERT", "UPDATE")},
+		Grants: grantSet(t, testGrant("reader", "SELECT"), testGrant("writer", "INSERT", "UPDATE")),
 		ColumnLevelGrants: types.SetValueMust(types.StringType, []attr.Value{
 			types.StringValue("other:UPDATE(name)"),
 		}),
@@ -72,7 +83,7 @@ func TestTableGrantsModelRoundTripsThroughSchema(t *testing.T) {
 	assert.Equal(t, want.ID, got.ID)
 	assert.Equal(t, want.Table, got.Table)
 	assert.Equal(t, want.Schema, got.Schema)
-	assert.ElementsMatch(t, want.Grants, got.Grants)
+	assert.True(t, want.Grants.Equal(got.Grants), "grants: want %v, got %v", want.Grants, got.Grants)
 	assert.Equal(t, want.ColumnLevelGrants, got.ColumnLevelGrants)
 }
 
@@ -80,7 +91,7 @@ func TestTableGrantsExtractPlanData(t *testing.T) {
 	plan := tableGrantsResourceModel{
 		Table:  types.StringValue("orders"),
 		Schema: types.StringValue("my_schema"),
-		Grants: Grants{testGrant("reader", "SELECT"), testGrant("writer", "INSERT", "UPDATE")},
+		Grants: grantSet(t, testGrant("reader", "SELECT"), testGrant("writer", "INSERT", "UPDATE")),
 	}
 
 	id, bindings, diags := (&tableGrantsResource{}).extractPlanData(context.Background(), &plan)
@@ -100,7 +111,7 @@ func TestTableGrantsExtractPlanDataDefaultSchema(t *testing.T) {
 	plan := tableGrantsResourceModel{
 		Table:  types.StringValue("orders"),
 		Schema: types.StringNull(),
-		Grants: Grants{testGrant("reader", "SELECT")},
+		Grants: grantSet(t, testGrant("reader", "SELECT")),
 	}
 
 	id, _, diags := (&tableGrantsResource{}).extractPlanData(context.Background(), &plan)
@@ -157,11 +168,14 @@ func TestGrantPermissionMapToGrants(t *testing.T) {
 		"reader": {"SELECT"},
 	})
 	require.False(t, diags.HasError(), diags)
-	assert.Equal(t, Grants{testGrant("reader", "SELECT"), testGrant("writer", "INSERT", "UPDATE")}, grants)
+	want := grantSet(t, testGrant("reader", "SELECT"), testGrant("writer", "INSERT", "UPDATE"))
+	assert.True(t, want.Equal(grants), "want %v, got %v", want, grants)
 
 	grants, diags = grantPermissionMapToGrants(context.Background(), map[string][]string{})
 	require.False(t, diags.HasError(), diags)
-	assert.Empty(t, grants)
+	assert.False(t, grants.IsNull())
+	assert.False(t, grants.IsUnknown())
+	assert.Empty(t, grants.Elements())
 }
 
 func TestColumnLevelGrantsToSet(t *testing.T) {
@@ -209,27 +223,26 @@ func TestEmptySetPlanModifier(t *testing.T) {
 	assert.True(t, resp.PlanValue.IsNull())
 }
 
-func TestUniqueGrantRolesValidator(t *testing.T) {
-	ctx := context.Background()
+// grantObjectType is written out by hand, so it must be kept in step with the
+// grant block in the schema.
+func TestGrantObjectTypeMatchesSchema(t *testing.T) {
 	grantSetType, ok := tableGrantsSchemaResponse(t).Schema.Blocks["grant"].Type().(types.SetType)
 	require.True(t, ok, "grant block should be a set")
-	grantType := grantSetType.ElemType
+	assert.True(t, grantObjectType.Equal(grantSetType.ElemType), "schema element type: %v", grantSetType.ElemType)
+}
 
+func TestUniqueGrantRolesValidator(t *testing.T) {
+	ctx := context.Background()
 	validate := func(value types.Set) bool {
 		var resp validator.SetResponse
 		uniqueGrantRolesValidator{}.ValidateSet(ctx, validator.SetRequest{Path: path.Root("grant"), ConfigValue: value}, &resp)
 		return resp.Diagnostics.HasError()
 	}
-	setOf := func(grants ...grantModel) types.Set {
-		value, diags := types.SetValueFrom(ctx, grantType, grants)
-		require.False(t, diags.HasError(), diags)
-		return value
-	}
 
-	assert.False(t, validate(setOf(testGrant("reader", "SELECT"), testGrant("writer", "INSERT"))))
-	assert.True(t, validate(setOf(testGrant("reader", "SELECT"), testGrant("reader", "INSERT"))))
-	assert.False(t, validate(types.SetUnknown(grantType)))
-	assert.False(t, validate(types.SetNull(grantType)))
+	assert.False(t, validate(grantSet(t, testGrant("reader", "SELECT"), testGrant("writer", "INSERT"))))
+	assert.True(t, validate(grantSet(t, testGrant("reader", "SELECT"), testGrant("reader", "INSERT"))))
+	assert.False(t, validate(types.SetUnknown(grantObjectType)))
+	assert.False(t, validate(types.SetNull(grantObjectType)))
 }
 
 func TestTableGrantsValidateConfig(t *testing.T) {
@@ -240,7 +253,7 @@ func TestTableGrantsValidateConfig(t *testing.T) {
 			fwresource.ValidateConfigRequest{Config: tfsdk.Config(plan)}, resp)
 		return resp
 	}
-	grants := Grants{testGrant("reader", "SELECT")}
+	grants := grantSet(t, testGrant("reader", "SELECT"))
 
 	resp := validate(tableGrantsResourceModel{
 		ID: types.StringUnknown(), Table: types.StringValue("orders"), Schema: types.StringNull(), Grants: grants,
@@ -257,6 +270,18 @@ func TestTableGrantsValidateConfig(t *testing.T) {
 		ID: types.StringUnknown(), Table: types.StringUnknown(), Schema: types.StringNull(), Grants: grants,
 	})
 	assert.False(t, resp.Diagnostics.HasError(), resp.Diagnostics)
+
+	// A dynamic grant block with an unknown for_each makes the whole grant set
+	// unknown; the table name is still checked.
+	unknownGrants := types.SetUnknown(grantObjectType)
+	resp = validate(tableGrantsResourceModel{
+		ID: types.StringUnknown(), Table: types.StringValue("orders"), Schema: types.StringNull(), Grants: unknownGrants,
+	})
+	assert.False(t, resp.Diagnostics.HasError(), resp.Diagnostics)
+	resp = validate(tableGrantsResourceModel{
+		ID: types.StringUnknown(), Table: types.StringValue("my_schema.orders"), Schema: types.StringNull(), Grants: unknownGrants,
+	})
+	assert.True(t, resp.Diagnostics.HasError())
 }
 
 // tableGrantsTestProviderConfig is a provider block for plan-time validation

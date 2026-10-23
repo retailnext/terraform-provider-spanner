@@ -53,8 +53,11 @@ type tableGrantsResourceModel struct {
 	Table types.String `tfsdk:"table"`
 	// Schema is the named schema containing Table; null for the default schema.
 	Schema types.String `tfsdk:"schema"`
-	// Grants is the complete set of role -> privileges bindings on the table.
-	Grants Grants `tfsdk:"grant"`
+	// Grants is the complete set of role -> privileges bindings on the table,
+	// one grantModel per grant block. A types.Set rather than []grantModel so
+	// the whole collection can be unknown, e.g. during validation of a dynamic
+	// grant block whose for_each isn't known yet.
+	Grants types.Set `tfsdk:"grant"`
 	// ColumnLevelGrants lists the column-level grants found on the table, each
 	// formatted as "role:PRIVILEGE(col1,col2)". Always planned as empty, since
 	// apply revokes them all; Read fills it, so one made outside Terraform shows
@@ -91,7 +94,9 @@ func (r *tableGrantsResource) Schema(_ context.Context, _ resource.SchemaRequest
 			"table": schema.StringAttribute{
 				MarkdownDescription: "The name of the table whose grants this resource manages, without any " +
 					"schema prefix (use `schema` for a table in a named schema). Letters, digits and underscores " +
-					"only. The table must already exist. Changing this forces a new resource: grants on the old " +
+					"only. The table must already exist, and the name must use the same case the table was " +
+					"created with: Spanner resolves names case-insensitively, but this resource looks the " +
+					"table and its grants up by exact name. Changing this forces a new resource: grants on the old " +
 					"table are all revoked and the new table's grants are set.",
 				Required: true,
 				PlanModifiers: []planmodifier.String{
@@ -100,7 +105,8 @@ func (r *tableGrantsResource) Schema(_ context.Context, _ resource.SchemaRequest
 			},
 			"schema": schema.StringAttribute{
 				MarkdownDescription: "The named schema containing `table`. Omit it for a table in the default " +
-					"schema. Letters, digits and underscores only. Changing this forces a new resource.",
+					"schema. Letters, digits and underscores only, in the same case the schema was created with. " +
+					"Changing this forces a new resource.",
 				Optional: true,
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.RequiresReplace(),
@@ -224,8 +230,13 @@ func (r *tableGrantsResource) extractPlanData(ctx context.Context, plan *tableGr
 		return
 	}
 
-	bindings = make([]*spanneracl.AuthoritativeBinding, 0, len(plan.Grants))
-	for _, g := range plan.Grants {
+	var grants []grantModel
+	diags.Append(plan.Grants.ElementsAs(ctx, &grants, false)...)
+	if diags.HasError() {
+		return
+	}
+	bindings = make([]*spanneracl.AuthoritativeBinding, 0, len(grants))
+	for _, g := range grants {
 		var privs []string
 		diags.Append(g.Privileges.ElementsAs(ctx, &privs, false)...)
 		if diags.HasError() {
@@ -399,6 +410,7 @@ func tableGrantsFromImportID(id string) (tg tableGrantsResourceModel, err error)
 	tg.Table = types.StringValue(parsed.ResourceName)
 	tg.Schema = schema
 	// Filled in by the Read that follows the import.
+	tg.Grants = types.SetNull(grantObjectType)
 	tg.ColumnLevelGrants = types.SetNull(types.StringType)
 	return tg, nil
 }

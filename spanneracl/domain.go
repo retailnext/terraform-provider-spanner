@@ -11,7 +11,8 @@ import (
 // ErrRoleNotFound is returned when a database role does not exist.
 var ErrRoleNotFound = errors.New("role not found")
 
-// ErrResourceNotFound is returned when a table or view that a grant targets does not exist.
+// ErrResourceNotFound is returned when a table or view that a grant targets does not exist,
+// including when the name exists only as the other kind.
 var ErrResourceNotFound = errors.New("resource not found")
 
 // authGrantResourceTypes and authGrantPrivilegesByType deliberately exclude SCHEMA:

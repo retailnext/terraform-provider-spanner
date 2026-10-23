@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 )
@@ -19,33 +20,34 @@ type grantModel struct {
 	Privileges types.Set    `tfsdk:"privileges"`
 }
 
-// Grants is the set of grant blocks on an authoritative grants resource.
-type Grants []grantModel
+// grantObjectType is the Terraform type of one grant block, i.e. of
+// grantModel. It must match the grant block's NestedObject in the resource
+// schema.
+var grantObjectType = types.ObjectType{AttrTypes: map[string]attr.Type{
+	"role":       types.StringType,
+	"privileges": types.SetType{ElemType: types.StringType},
+}}
 
 // grantPermissionMapToGrants converts a role -> privileges map, as returned by
-// spanneracl.GetAllRolePermissionsPerId, into grant blocks, one per role in
-// role-name order.
-func grantPermissionMapToGrants(ctx context.Context, permissionMap map[string][]string) (Grants, diag.Diagnostics) {
-	roles := make([]string, 0, len(permissionMap))
-	for role := range permissionMap {
-		roles = append(roles, role)
-	}
-	slices.Sort(roles)
-
+// spanneracl.GetAllRolePermissionsPerId, into a set of grant blocks, one per
+// role. An empty map gives an empty set, not null.
+func grantPermissionMapToGrants(ctx context.Context, permissionMap map[string][]string) (types.Set, diag.Diagnostics) {
 	var diags diag.Diagnostics
-	grants := make(Grants, 0, len(roles))
-	for _, role := range roles {
-		privileges, d := types.SetValueFrom(ctx, types.StringType, permissionMap[role])
+	grants := make([]grantModel, 0, len(permissionMap))
+	for role, rolePrivileges := range permissionMap {
+		privileges, d := types.SetValueFrom(ctx, types.StringType, rolePrivileges)
 		diags.Append(d...)
 		if diags.HasError() {
-			return nil, diags
+			return types.SetNull(grantObjectType), diags
 		}
 		grants = append(grants, grantModel{
 			Role:       types.StringValue(role),
 			Privileges: privileges,
 		})
 	}
-	return grants, diags
+	set, d := types.SetValueFrom(ctx, grantObjectType, grants)
+	diags.Append(d...)
+	return set, diags
 }
 
 // columnLevelGrantsToSet formats a role -> privilege -> columns map, as returned

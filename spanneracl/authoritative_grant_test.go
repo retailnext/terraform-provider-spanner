@@ -254,7 +254,9 @@ func TestCheckResourceExists(t *testing.T) {
 	assert.NoError(t, check(f.table, "TABLE"))
 	assert.NoError(t, check(view, "VIEW"))
 	assert.ErrorContains(t, check(f.table, "VIEW"), "not a VIEW")
+	assert.ErrorIs(t, check(f.table, "VIEW"), ErrResourceNotFound)
 	assert.ErrorContains(t, check(view, "TABLE"), "not a BASE TABLE")
+	assert.ErrorIs(t, check(view, "TABLE"), ErrResourceNotFound)
 	assert.ErrorIs(t, check("acltest_no_such_table", "TABLE"), ErrResourceNotFound)
 
 	err := f.client.ApplyAuthoritativeBinding(ctx, "acltest_no_such_table", "TABLE", nil)
@@ -441,4 +443,54 @@ func TestRevokeAllGrantsOnIdentifierMissingResource(t *testing.T) {
 
 	assert.NoError(t, client.RevokeAllGrantsOnIdentifier(ctx, "no_such_table", "TABLE"))
 	assert.ErrorIs(t, client.ApplyAuthoritativeBinding(ctx, "no_such_table", "TABLE", nil), ErrResourceNotFound)
+}
+
+// TestRevokeAllGrantsOnIdentifierTypeMismatch checks that a name now held by
+// the other kind of object - e.g. a table dropped and a view created in its
+// place - reads back as ErrResourceNotFound and revokes nothing, while
+// ApplyAuthoritativeBinding still reports the mismatch. Runs on the emulator
+// for the same reason as TestRevokeAllGrantsOnIdentifierMissingResource.
+func TestRevokeAllGrantsOnIdentifierTypeMismatch(t *testing.T) {
+	client := newTestClientWithTableAndRole(t)
+	ctx := context.Background()
+	const view = "mismatch_view"
+	require.NoError(t, client.updateDatabaseDdl(ctx,
+		"CREATE VIEW `"+view+"` SQL SECURITY INVOKER AS SELECT t.id FROM `"+testGrantTableName+"` AS t"))
+
+	assert.NoError(t, client.RevokeAllGrantsOnIdentifier(ctx, view, "TABLE"))
+	assert.NoError(t, client.RevokeAllGrantsOnIdentifier(ctx, testGrantTableName, "VIEW"))
+
+	_, err := client.GetAllRolePermissionsPerId(ctx, view, "TABLE")
+	assert.ErrorIs(t, err, ErrResourceNotFound)
+	_, err = client.GetColumnLevelOnlyPermissionsPerId(ctx, view, "TABLE")
+	assert.ErrorIs(t, err, ErrResourceNotFound)
+
+	err = client.ApplyAuthoritativeBinding(ctx, view, "TABLE", nil)
+	assert.ErrorIs(t, err, ErrResourceNotFound)
+	assert.ErrorContains(t, err, "not a BASE TABLE")
+}
+
+// TestCheckResourceExistsCaseMismatch checks that the lookup is case-sensitive,
+// matching how INFORMATION_SCHEMA stores names, and that a name differing only
+// in case is suggested in the not-found error. Runs on the emulator: it only
+// needs INFORMATION_SCHEMA.TABLES.
+func TestCheckResourceExistsCaseMismatch(t *testing.T) {
+	client := newTestClient(t)
+	ctx := context.Background()
+	require.NoError(t, client.updateDatabaseDdl(ctx, "CREATE TABLE `CaseTable` (id INT64) PRIMARY KEY (id)"))
+
+	check := func(name string) error {
+		id, err := ParseIdentifier(name, "TABLE")
+		require.NoError(t, err)
+		return client.checkResourceExists(ctx, *id)
+	}
+	assert.NoError(t, check("CaseTable"))
+
+	err := check("casetable")
+	assert.ErrorIs(t, err, ErrResourceNotFound)
+	assert.ErrorContains(t, err, `found "CaseTable"`)
+
+	err = check("no_such_table")
+	assert.ErrorIs(t, err, ErrResourceNotFound)
+	assert.NotContains(t, err.Error(), `found "`)
 }

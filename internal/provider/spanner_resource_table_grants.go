@@ -189,32 +189,50 @@ func (r *tableGrantsResource) Create(ctx context.Context, req resource.CreateReq
 		return
 	}
 
-	resp.Diagnostics.Append(r.applyPlanData(ctx, &plan)...)
+	mayBePartiallyApplied, diags := r.applyPlanData(ctx, &plan)
+	resp.Diagnostics.Append(diags...)
 	if resp.Diagnostics.HasError() {
+		if mayBePartiallyApplied {
+			// Some grants may exist now. Saving state with the error makes
+			// Terraform record the resource as tainted, so the next apply
+			// replaces it, and removing it from the configuration revokes
+			// them, instead of leaving them untracked.
+			resp.Diagnostics.AddWarning(
+				"Table Grants May Be Partially Applied",
+				"Some grant changes may have been applied before the error. The resource was saved as tainted "+
+					"and will be replaced on the next apply.",
+			)
+			resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
+		}
 		return
 	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
-// applyPlanData converts plan into an identifier and bindings, reconciles the
-// table's grants to exactly those bindings, and sets plan.ID to the
-// identifier. Shared by Create and Update.
-func (r *tableGrantsResource) applyPlanData(ctx context.Context, plan *tableGrantsResourceModel) (diags diag.Diagnostics) {
+// applyPlanData converts plan into an identifier and bindings, sets plan.ID to
+// the identifier, and reconciles the table's grants to exactly those bindings.
+// mayBePartiallyApplied reports whether a failed reconciliation may have
+// changed grants anyway (spanneracl.ErrDDLMayBePartiallyApplied). Shared by
+// Create and Update.
+func (r *tableGrantsResource) applyPlanData(ctx context.Context, plan *tableGrantsResourceModel) (
+	mayBePartiallyApplied bool,
+	diags diag.Diagnostics,
+) {
 	id, bindings, extractDiags := r.extractPlanData(ctx, plan)
 	diags.Append(extractDiags...)
 	if diags.HasError() {
-		return diags
-	}
-
-	if err := r.client.ApplyAuthoritativeBinding(ctx, id, "TABLE", bindings); err != nil {
-		diags.AddError("Error Applying Table Grants", err.Error())
-		return
+		return false, diags
 	}
 
 	plan.ID = types.StringValue(id)
-	// The apply revoked every column-level grant on the table.
+	// The apply revokes every column-level grant on the table.
 	plan.ColumnLevelGrants = types.SetValueMust(types.StringType, []attr.Value{})
-	return diags
+
+	if err := r.client.ApplyAuthoritativeBinding(ctx, id, "TABLE", bindings); err != nil {
+		diags.AddError("Error Applying Table Grants", err.Error())
+		return errors.Is(err, spanneracl.ErrDDLMayBePartiallyApplied), diags
+	}
+	return false, diags
 }
 
 // extractPlanData builds the spanneracl table identifier ("table" or
@@ -305,7 +323,10 @@ func (r *tableGrantsResource) Update(ctx context.Context, req resource.UpdateReq
 		return
 	}
 
-	diags := r.applyPlanData(ctx, &plan)
+	// On error the framework keeps the prior state, so grants are still
+	// tracked even if the reconciliation was partially applied; the next
+	// plan's refresh shows what changed.
+	_, diags := r.applyPlanData(ctx, &plan)
 	resp.Diagnostics.Append(diags...)
 	if resp.Diagnostics.HasError() {
 		return

@@ -196,7 +196,33 @@ func TestUpdateDatabaseDdlRejectedRequestAppliesNothing(t *testing.T) {
 	statements := ddlTestTables(25)
 	statements = append(statements, statements[0])
 
-	require.Error(t, client.updateDatabaseDdl(context.Background(), statements...))
+	err := client.updateDatabaseDdl(context.Background(), statements...)
+	require.Error(t, err)
+	assert.NotErrorIs(t, err, ErrDDLMayBePartiallyApplied)
 
 	assert.Empty(t, listDdlTestTables(t, client))
+}
+
+// TestUpdateDatabaseDdlExecutionFailureMayBePartiallyApplied checks that a
+// statement passing server-side validation but failing at execution time (a
+// unique index over duplicate values) is reported as
+// ErrDDLMayBePartiallyApplied, with the statement before it left applied.
+func TestUpdateDatabaseDdlExecutionFailureMayBePartiallyApplied(t *testing.T) {
+	ctx := context.Background()
+	client := newTestClient(t)
+	require.NoError(t, client.updateDatabaseDdl(ctx,
+		"CREATE TABLE `ddltest_dups` (id INT64, v INT64) PRIMARY KEY (id)"))
+	_, err := client.DataClient.Apply(ctx, []*spanner.Mutation{
+		spanner.Insert("ddltest_dups", []string{"id", "v"}, []any{1, 7}),
+		spanner.Insert("ddltest_dups", []string{"id", "v"}, []any{2, 7}),
+	})
+	require.NoError(t, err)
+
+	err = client.updateDatabaseDdl(ctx,
+		"CREATE TABLE `ddltest_00` (id INT64) PRIMARY KEY (id)",
+		"CREATE UNIQUE INDEX `ddltest_dups_v` ON `ddltest_dups` (v)",
+	)
+	require.ErrorIs(t, err, ErrDDLMayBePartiallyApplied)
+
+	assert.Equal(t, []string{"ddltest_00", "ddltest_dups"}, listDdlTestTables(t, client))
 }

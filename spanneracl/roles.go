@@ -96,10 +96,10 @@ func (c *Client) updateDatabaseDdl(ctx context.Context, statements ...string) er
 
 	// A submit error means the request was rejected before being enqueued, so
 	// nothing in it was applied. A Wait error can come after some leading
-	// statements already committed, so say so explicitly.
+	// statements already committed, so mark it with ErrDDLMayBePartiallyApplied.
 	if err := op.Wait(ctx); err != nil {
-		return fmt.Errorf("failed to apply ddl statements %q (some leading statements may already be applied): %w",
-			statements, err)
+		return fmt.Errorf("failed to apply ddl statements %q: %w: %w",
+			statements, ErrDDLMayBePartiallyApplied, err)
 	}
 
 	return nil

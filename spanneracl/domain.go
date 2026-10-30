@@ -15,6 +15,13 @@ var ErrRoleNotFound = errors.New("role not found")
 // including when the name exists only as the other kind.
 var ErrResourceNotFound = errors.New("resource not found")
 
+// ErrDDLMayBePartiallyApplied is returned when a DDL request was accepted by
+// the server but waiting for it to complete failed - including when ctx was
+// cancelled, which does not cancel the server-side operation. Some or all of
+// its statements may have been applied. An error without it means the request
+// was rejected before any statement was applied.
+var ErrDDLMayBePartiallyApplied = errors.New("ddl statements may be partially applied")
+
 // authGrantResourceTypes and authGrantPrivilegesByType deliberately exclude SCHEMA:
 // see the "Out of Scope" doc comment at the top of authoritative_grant.go for why (no confirmed
 // INFORMATION_SCHEMA view exists to read schema-level USAGE grants back, so

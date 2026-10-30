@@ -73,19 +73,33 @@ func (c *Client) DeleteRole(ctx context.Context, role Role) error {
 	return c.updateDatabaseDdl(ctx, fmt.Sprintf("DROP ROLE `%s`", role.Name))
 }
 
-// updateDatabaseDdl issues a single DDL statement against the database and
-// waits for the resulting long-running operation to complete.
-func (c *Client) updateDatabaseDdl(ctx context.Context, statement string) error {
+// updateDatabaseDdl issues one or more DDL statements against the database as
+// a single UpdateDatabaseDdl request and waits for its long-running operation
+// to complete. Spanner's published quotas list no per-request statement count
+// (only a 10 MiB size limit on a schema change), so statements are never split
+// across requests.
+//
+// This is NOT atomic. Per the UpdateDatabaseDdl API docs, the server checks
+// that every statement in the request is executable (syntax, referenced
+// objects exist) before enqueueing any of them - so those failures reject the
+// whole request with nothing applied - but statements are then applied "in
+// order but not necessarily all at once", and if one fails at execution time
+// the rest are cancelled while the ones before it stay applied.
+func (c *Client) updateDatabaseDdl(ctx context.Context, statements ...string) error {
 	op, err := c.AdminClient.UpdateDatabaseDdl(ctx, &databasepb.UpdateDatabaseDdlRequest{
 		Database:   c.DatabasePath,
-		Statements: []string{statement},
+		Statements: statements,
 	})
 	if err != nil {
-		return fmt.Errorf("failed to submit ddl statement %q: %w", statement, err)
+		return fmt.Errorf("failed to submit ddl statements %q: %w", statements, err)
 	}
 
+	// A submit error means the request was rejected before being enqueued, so
+	// nothing in it was applied. A Wait error can come after some leading
+	// statements already committed, so mark it with ErrDDLMayBePartiallyApplied.
 	if err := op.Wait(ctx); err != nil {
-		return fmt.Errorf("failed to apply ddl statement %q: %w", statement, err)
+		return fmt.Errorf("failed to apply ddl statements %q: %w: %w",
+			statements, ErrDDLMayBePartiallyApplied, err)
 	}
 
 	return nil

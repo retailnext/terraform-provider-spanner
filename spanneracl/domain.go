@@ -11,6 +11,28 @@ import (
 // ErrRoleNotFound is returned when a database role does not exist.
 var ErrRoleNotFound = errors.New("role not found")
 
+// ErrResourceNotFound is returned when a table or view that a grant targets does not exist,
+// including when the name exists only as the other kind.
+var ErrResourceNotFound = errors.New("resource not found")
+
+// ErrDDLMayBePartiallyApplied is returned when a DDL request was accepted by
+// the server but waiting for it to complete failed - including when ctx was
+// cancelled, which does not cancel the server-side operation. Some or all of
+// its statements may have been applied. An error without it means the request
+// was rejected before any statement was applied.
+var ErrDDLMayBePartiallyApplied = errors.New("ddl statements may be partially applied")
+
+// authGrantResourceTypes and authGrantPrivilegesByType deliberately exclude SCHEMA:
+// see the "Out of Scope" doc comment at the top of authoritative_grant.go for why (no confirmed
+// INFORMATION_SCHEMA view exists to read schema-level USAGE grants back, so
+// GetAllRolePermissionsPerId could never detect one - the same class of gap that got
+// SEQUENCE/SCHEMA/TABLE FUNCTION dropped from validResourceTypes below).
+var authGrantResourceTypes = []string{"TABLE", "VIEW"}
+var authGrantPrivilegesByType = map[string][]string{
+	"TABLE": {"SELECT", "INSERT", "UPDATE", "DELETE"},
+	"VIEW":  {"SELECT"},
+}
+
 // Role represents a Spanner database role used for fine-grained access
 // control (FGAC). Unlike ScyllaDB roles, Spanner database roles carry no
 // attributes of their own (no login/superuser flags): they are purely

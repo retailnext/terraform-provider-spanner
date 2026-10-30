@@ -12,7 +12,9 @@ privilege grants, and role membership. The provider authenticates using the stan
 library scheme (Application Default Credentials by default) - see the
 [Authentication](guides/authentication) guide for details. Note that this provider does not
 manage the lifecycle of Spanner instances or databases themselves. It is focused on access
-control management within a single, already-existing database.
+control management within a single, already-existing database. See the
+[Service Accounts and Database Roles](guides/service_account_database_role) guide for how to let a
+GCP service account act as a database role.
 
 ## Example Usage
 

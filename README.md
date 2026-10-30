@@ -205,25 +205,48 @@ Terraform code before it is published.
 
 2. Using the local "release" binary
 
-   By manually doing what `terraform init` would have done, you can use the local code. The
-   following example shows the steps in a Linux environment with an amd64 processor.
+   By manually doing what `terraform init` would have done, you can use the local code. The last
+   directory in the plugin path must be `<os>_<arch>` for the machine running Terraform (e.g.
+   `linux_amd64`, `darwin_arm64`); the example below derives it from `go env`.
 
    ```shell
+   PLATFORM="$(go env GOOS)_$(go env GOARCH)"
    CGO_ENABLED=0 go build -trimpath -o terraform-provider-spanner_v1.0.0 -ldflags "-s -w -X main.version=1.0.0" .
-   mkdir -p ~/.terraform.d/plugins/local.providers/local/spanner/1.0.0/linux_amd64
-   mv terraform-provider-spanner_v1.0.0 ~/.terraform.d/plugins/local.providers/local/spanner/1.0.0/linux_amd64
+   mkdir -p ~/.terraform.d/plugins/local.providers/local/spanner/1.0.0/${PLATFORM}
+   mv terraform-provider-spanner_v1.0.0 ~/.terraform.d/plugins/local.providers/local/spanner/1.0.0/${PLATFORM}/
+   ```
 
-   cat <<EOF > $HOME/.terraformrc
+   Then add the following to `~/.terraformrc`, replacing `/home/myusername` with your home directory
+   (the path must be absolute). If the file already has a `provider_installation` block, merge these
+   blocks into it rather than overwriting the file.
+
+   ```
    provider_installation {
        filesystem_mirror {
-           path = "/home/runner/.terraform.d/plugins"
+           path = "/home/myusername/.terraform.d/plugins"
            include = ["local.providers/*/*"]
        }
        direct {
            exclude = ["local.providers/*/*"]
        }
    }
-   EOF
    ```
 
-   If you are using `tofu`, use `$HOME/.tofurc` instead of `$HOME/.terraformrc` in the example.
+   If you are using `tofu`, use `~/.tofurc` instead of `~/.terraformrc`.
+
+   In your Terraform code, refer to the provider by its local address and version:
+
+   ```terraform
+   terraform {
+     required_providers {
+       spanner = {
+         source  = "local.providers/local/spanner"
+         version = "1.0.0"
+       }
+     }
+   }
+   ```
+
+   After rebuilding the binary under the same version, delete `.terraform/` and
+   `.terraform.lock.hcl` in your Terraform code before running `init` again, since the lock file
+   records the checksum of the previous binary.

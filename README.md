@@ -93,12 +93,66 @@ go test -v -cover ./...     # unit tests + provider-config unit tests + emulator
 [testcontainers-go](https://golang.testcontainers.org/), so they run slower than typical unit
 tests.
 
-⚠️ **Full `spanner_role` acceptance tests (`TF_ACC=1`) do not currently pass against the
-emulator.** `Read` depends on `spanneracl.GetRole`, which queries
-`INFORMATION_SCHEMA.ROLES` — a view the Cloud Spanner emulator doesn't implement. Every
-`resource.Test` step runs a post-apply `Read` internally, so this currently blocks emulator-based
-acceptance testing of the resource end-to-end; it doesn't block real usage against actual Spanner.
-Exercise the resource against a real Spanner instance/database until the emulator gap is fixed upstream.
+⚠️ **Some tests can't run against the emulator.** The Cloud Spanner emulator doesn't implement
+`INFORMATION_SCHEMA.ROLES`, `TABLE_PRIVILEGES` or `COLUMN_PRIVILEGES`, and rejects column-level
+grants
+([cloud-spanner-emulator#350](https://github.com/GoogleCloudPlatform/cloud-spanner-emulator/issues/350)).
+Tests that read roles or grants back - including every Terraform acceptance test, since each
+`resource.Test` step runs a post-apply `Read` - run against a real Spanner database instead, and
+are skipped unless one is configured. See
+[Running tests against a real Spanner database](#running-tests-against-a-real-spanner-database).
+
+### Running tests against a real Spanner database
+
+The real-Spanner tests run only when `SPANNER_TEST_DATABASE` is set to the full path of an
+existing GoogleSQL-dialect database; without it they're skipped, so the commands above never touch
+a real database. The Terraform acceptance tests (`TestAcc*` using `resource.Test`) additionally
+need `TF_ACC=1`.
+
+1. Authenticate with Application Default Credentials. The identity needs the same roles as the
+   provider itself (see [Required GCP IAM permissions](#required-gcp-iam-permissions)) on the test
+   database - `roles/spanner.databaseUser` includes the DDL permission the tests use:
+
+   ```shell
+   gcloud auth application-default login
+   ```
+
+2. Point the tests at the database:
+
+   ```shell
+   export SPANNER_TEST_DATABASE=projects/<project>/instances/<instance>/databases/<database>
+   ```
+
+3. Run the tests. Docker is still needed for the emulator-backed tests, which run alongside:
+
+   ```shell
+   # Unit, emulator and real-Spanner client tests; Terraform acceptance tests are skipped
+   go test -v -cover -timeout 45m ./...
+
+   # Everything above plus the Terraform acceptance tests (sets TF_ACC=1)
+   make testacc
+
+   # A single test, e.g. the spanner_table_grants acceptance test
+   TF_ACC=1 go test -v -run TestAccTableGrantsResource ./internal/provider
+   ```
+
+   Don't use `make test` with `SPANNER_TEST_DATABASE` set: its 120-second timeout is far shorter
+   than a real-Spanner run. Every schema change on real Spanner takes seconds, so a full run takes
+   around 20 minutes.
+
+Each test creates its own uniquely named tables, views and roles (prefixed `acltest_`) and removes
+them when it finishes, so it's safe to use a database other work shares. A run that's interrupted
+(Ctrl-C, or a `go test` timeout) can skip that cleanup; to find leftovers:
+
+```shell
+gcloud spanner databases execute-sql <database> --project=<project> --instance=<instance> \
+  --sql="SELECT TABLE_TYPE, TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME LIKE 'acltest_%'
+         UNION ALL SELECT 'ROLE', ROLE_NAME FROM INFORMATION_SCHEMA.ROLES WHERE ROLE_NAME LIKE 'acltest_%'"
+```
+
+To remove them, revoke any grants the `acltest_` roles still hold, then drop the roles, then any
+views, then the tables (Spanner won't drop a role that holds privileges or a table a view depends
+on).
 
 To regenerate documentation after editing `templates/` or `examples/`, run:
 
@@ -151,25 +205,48 @@ Terraform code before it is published.
 
 2. Using the local "release" binary
 
-   By manually doing what `terraform init` would have done, you can use the local code. The
-   following example shows the steps in a Linux environment with an amd64 processor.
+   By manually doing what `terraform init` would have done, you can use the local code. The last
+   directory in the plugin path must be `<os>_<arch>` for the machine running Terraform (e.g.
+   `linux_amd64`, `darwin_arm64`); the example below derives it from `go env`.
 
    ```shell
+   PLATFORM="$(go env GOOS)_$(go env GOARCH)"
    CGO_ENABLED=0 go build -trimpath -o terraform-provider-spanner_v1.0.0 -ldflags "-s -w -X main.version=1.0.0" .
-   mkdir -p ~/.terraform.d/plugins/local.providers/local/spanner/1.0.0/linux_amd64
-   mv terraform-provider-spanner_v1.0.0 ~/.terraform.d/plugins/local.providers/local/spanner/1.0.0/linux_amd64
+   mkdir -p ~/.terraform.d/plugins/local.providers/local/spanner/1.0.0/${PLATFORM}
+   mv terraform-provider-spanner_v1.0.0 ~/.terraform.d/plugins/local.providers/local/spanner/1.0.0/${PLATFORM}/
+   ```
 
-   cat <<EOF > $HOME/.terraformrc
+   Then add the following to `~/.terraformrc`, replacing `/home/myusername` with your home directory
+   (the path must be absolute). If the file already has a `provider_installation` block, merge these
+   blocks into it rather than overwriting the file.
+
+   ```
    provider_installation {
        filesystem_mirror {
-           path = "/home/runner/.terraform.d/plugins"
+           path = "/home/myusername/.terraform.d/plugins"
            include = ["local.providers/*/*"]
        }
        direct {
            exclude = ["local.providers/*/*"]
        }
    }
-   EOF
    ```
 
-   If you are using `tofu`, use `$HOME/.tofurc` instead of `$HOME/.terraformrc` in the example.
+   If you are using `tofu`, use `~/.tofurc` instead of `~/.terraformrc`.
+
+   In your Terraform code, refer to the provider by its local address and version:
+
+   ```terraform
+   terraform {
+     required_providers {
+       spanner = {
+         source  = "local.providers/local/spanner"
+         version = "1.0.0"
+       }
+     }
+   }
+   ```
+
+   After rebuilding the binary under the same version, delete `.terraform/` and
+   `.terraform.lock.hcl` in your Terraform code before running `init` again, since the lock file
+   records the checksum of the previous binary.

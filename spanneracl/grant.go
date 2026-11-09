@@ -58,34 +58,47 @@ type grantTemplateData struct {
 
 // CreateGrant grants a single privilege on a single resource to a role.
 func (c *Client) CreateGrant(ctx context.Context, grant Grant) error {
-	data, err := newGrantTemplateData(grant)
+	stmt, err := createGrantStatement(grant)
 	if err != nil {
 		return err
 	}
-
-	var buf bytes.Buffer
-	if err := templateCreateGrant.Execute(&buf, data); err != nil {
-		return fmt.Errorf("failed to render create grant statement: %w", err)
-	}
-
-	return c.updateDatabaseDdl(ctx, buf.String())
+	return c.updateDatabaseDdl(ctx, stmt)
 }
 
 // DeleteGrant revokes a single privilege on a single resource from a role.
 //
 // Note that REVOKE statements in Spanner do not error if the grant does not exist.
 func (c *Client) DeleteGrant(ctx context.Context, grant Grant) error {
-	data, err := newGrantTemplateData(grant)
+	stmt, err := deleteGrantStatement(grant)
 	if err != nil {
 		return err
 	}
+	return c.updateDatabaseDdl(ctx, stmt)
+}
 
-	var buf bytes.Buffer
-	if err := templateDeleteGrant.Execute(&buf, data); err != nil {
-		return fmt.Errorf("failed to render delete grant statement: %w", err)
+// createGrantStatement validates grant and renders its GRANT DDL without
+// executing it, so callers can batch several statements into one
+// updateDatabaseDdl call.
+func createGrantStatement(grant Grant) (string, error) {
+	return renderGrantStatement(templateCreateGrant, grant)
+}
+
+// deleteGrantStatement is createGrantStatement's REVOKE counterpart.
+func deleteGrantStatement(grant Grant) (string, error) {
+	return renderGrantStatement(templateDeleteGrant, grant)
+}
+
+func renderGrantStatement(tmpl *template.Template, grant Grant) (string, error) {
+	data, err := newGrantTemplateData(grant)
+	if err != nil {
+		return "", err
 	}
 
-	return c.updateDatabaseDdl(ctx, buf.String())
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, data); err != nil {
+		return "", fmt.Errorf("failed to render %s statement: %w", tmpl.Name(), err)
+	}
+	return buf.String(), nil
 }
 
 // GrantExists reports whether the given grant currently exists, read back
